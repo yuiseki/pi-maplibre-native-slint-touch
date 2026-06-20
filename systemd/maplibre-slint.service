@@ -1,5 +1,5 @@
 [Unit]
-Description=maplibre-native-slint map (KMS + software GL) with idle screensaver
+Description=maplibre-native-slint map (KMS + software GL) with staged idle screensaver
 After=multi-user.target network-online.target
 Wants=network-online.target
 
@@ -9,20 +9,23 @@ User=yuiseki
 SupplementaryGroups=video render input gpio i2c spi
 Environment=HOME=/home/yuiseki
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-# --- KMS console + software GL (no X11/Wayland, no HW GLES3) ---
+# KMS console + software GL (no X11/Wayland, no HW GLES3)
 Environment=SLINT_BACKEND=linuxkms-noseat
 Environment=EGL_PLATFORM=surfaceless
 Environment=LIBGL_ALWAYS_SOFTWARE=1
 Environment=GALLIUM_DRIVER=llvmpipe
 Environment=LD_LIBRARY_PATH=/home/yuiseki/mls-libs
-# --- map style / initial view (style also appears in the dropdown) ---
+# map style / initial view (style also appears in the dropdown)
 Environment=MAPLIBRE_STYLE_URL=https://yuiseki.dev/static/styles/osm-fiord.json
 Environment=MAPLIBRE_LAT=35.68
 Environment=MAPLIBRE_LON=139.76
 Environment=MAPLIBRE_ZOOM=9
-# --- screensaver: 5 min -> bouncing DVD logo, 15 min -> black ---
+# staged screensaver: 5min->DVD, +30min->map tiles (new region/style every 15min), 12h->off
 Environment=MAPLIBRE_SAVER_SECS=300
-Environment=MAPLIBRE_OFF_SECS=900
+Environment=MAPLIBRE_DVD_SECS=1800
+Environment=MAPLIBRE_TILE_CHANGE_SECS=900
+Environment=MAPLIBRE_TILE_LOAD_SECS=15
+Environment=MAPLIBRE_OFF_SECS=43200
 WorkingDirectory=/home/yuiseki
 ExecStart=/home/yuiseki/maplibre_native_slint
 Restart=always

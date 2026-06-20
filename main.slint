@@ -17,11 +17,13 @@ export component MapWindow inherits Window {
     changed map-size => { map-size-changed(); }
 
     // --- screensaver (driven from Rust) ---
-    // 0 = normal, 1 = screensaver (bouncing logo), 2 = off (black)
+    // 0 = normal, 1 = DVD logo bounce, 2 = bouncing map tile, 3 = off (black)
     in property <int> saver-state: 0;
     in property <length> logo-x: 40px;
     in property <length> logo-y: 40px;
     in property <brush> logo-color: #4af;
+    in property <image> tile-image;          // captured map crop for stage 2
+    in property <bool> map-render-active: true; // gate for the MMapView render loop
     callback wake();
 
     // Style list shown in the dropdown. Rust prepends MAPLIBRE_STYLE_URL when set.
@@ -87,8 +89,9 @@ export component MapWindow inherits Window {
             center-lat: 0;
             center-lon: 0;
             zoom: 1;
-            // Stop the 16ms map render loop while the screensaver is up.
-            render-active: root.saver-state == 0;
+            // Render loop gate, controlled from Rust (off during screensaver,
+            // briefly on while a tile is being captured).
+            render-active: root.map-render-active;
         }
     }
 
@@ -114,6 +117,16 @@ export component MapWindow inherits Window {
             source: @image-url("assets/dvd-logo.png");
             colorize: root.logo-color;
             image-fit: contain;
+            x: root.logo-x;
+            y: root.logo-y;
+            width: 140px;
+            height: 84px;
+        }
+
+        // Stage 2: bouncing map tile (random region/style, captured by Rust).
+        if root.saver-state == 2: Image {
+            source: root.tile-image;
+            image-fit: fill;
             x: root.logo-x;
             y: root.logo-y;
             width: 140px;

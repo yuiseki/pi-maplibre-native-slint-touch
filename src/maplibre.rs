@@ -7,9 +7,7 @@ use crate::MMapAdapter;
 use crate::MapWindow;
 
 mod headless;
-use headless::MapCamera;
-use headless::MapLibre;
-pub use headless::create_map;
+pub use headless::{MapCamera, MapLibre, create_map};
 
 fn push_camera_state(ui: &MapWindow, camera: MapCamera) {
     let adapter = ui.global::<MMapAdapter>();

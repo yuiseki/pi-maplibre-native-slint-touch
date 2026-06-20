@@ -27,7 +27,7 @@ fn main() {
 
     maplibre::init(&ui, &map);
     setup_styles(&ui);
-    screensaver::install(&ui);
+    screensaver::install(&ui, &map);
 
     ui.run().unwrap();
 }

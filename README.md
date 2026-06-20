@@ -56,17 +56,30 @@ LD_LIBRARY_PATH="$HOME/mls-libs" \
 |---|---|
 | `MAPLIBRE_STYLE_URL` | Initial style; also prepended to the dropdown (PMTiles `pmtiles://` ok) |
 | `MAPLIBRE_LAT` / `MAPLIBRE_LON` / `MAPLIBRE_ZOOM` | Initial camera |
-| `MAPLIBRE_SAVER_SECS` | Idle seconds → screensaver (default 300) |
-| `MAPLIBRE_OFF_SECS` | Idle seconds → black/off (default 900) |
+| `MAPLIBRE_SAVER_SECS` | Idle seconds → DVD screensaver (default 300 = 5 min) |
+| `MAPLIBRE_DVD_SECS` | Seconds of DVD before switching to map tiles (default 1800 = 30 min) |
+| `MAPLIBRE_TILE_CHANGE_SECS` | New random region/style every N seconds (default 900 = 15 min) |
+| `MAPLIBRE_TILE_LOAD_SECS` | Render window to load each tile before capture (default 15) |
+| `MAPLIBRE_OFF_SECS` | Idle seconds → black/off (default 43200 = 12 h) |
 | `MAPLIBRE_TOUCH_DEV` | Touch evdev node (default `/dev/input/event4`) |
 
-## Screensaver
+## Screensaver (staged "hidden mode")
 
-- After `MAPLIBRE_SAVER_SECS` of no touch → bouncing DVD logo (colour changes on bounce).
-- After `MAPLIBRE_OFF_SECS` → black ("off"; this LCD has no backlight control).
-- Any touch wakes (a full-screen overlay catches it; the evdev watcher is the backstop).
-- While the screensaver is up the map render loop is paused (`render-active`),
-  dropping CPU from ~50% to ~1–8%.
+Idle time drives the stages:
+
+1. **0–5 min**: normal interactive map.
+2. **5–35 min**: bouncing DVD logo (colour changes on each bounce).
+3. **35 min – 12 h**: bouncing **map tile** — a random region at a random style,
+   re-picked every 15 min. Each pick renders the map for ~15 s, crops its centre
+   to the logo size and bounces that still image (cheap after capture).
+   - Styles: `osm-bright-ja`, `maptiler-basic-ja`, `osm-fiord`.
+   - Regions: Paris, New York, Tokyo, Hiroshima (extend `REGIONS` in `src/screensaver.rs`).
+4. **12 h+**: black ("off"; this LCD has no backlight control).
+
+Any touch wakes and restores the user's pre-screensaver style + camera (a
+full-screen overlay catches the touch; the evdev watcher is the backstop).
+The map render loop is paused (`render-active`) except briefly while a tile is
+captured, so idle CPU stays low (~1–8 % vs ~50 % live).
 
 ## Touch calibration
 

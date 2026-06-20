@@ -99,6 +99,14 @@ impl MapLibre {
         self.camera
     }
 
+    pub fn style_url(&self) -> &str {
+        &self.style_url
+    }
+
+    pub fn has_frame(&self) -> bool {
+        self.last_image.is_some()
+    }
+
     pub fn style_loaded(&self) -> bool {
         self.style_loaded
     }
