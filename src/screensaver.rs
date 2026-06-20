@@ -7,9 +7,10 @@
 //!   0 normal
 //!   1 DVD logo bounce            [SAVER_SECS .. SAVER_SECS+DVD_SECS)
 //!   2 bouncing square map tile   [SAVER_SECS+DVD_SECS .. OFF_SECS)
-//!       random region + style, re-picked on every wall bounce; the map is
-//!       rendered for ~TILE_LOAD_SECS at MAPLIBRE_TILE_ZOOM, its centre is
-//!       cropped square and bounced as a still image (cheap once captured)
+//!       a set of MAPLIBRE_TILE_CACHE tiles (random region+style at
+//!       MAPLIBRE_TILE_ZOOM) is pre-rendered once into an image cache; the map
+//!       only renders during that warm-up. After that each wall bounce just
+//!       swaps to the next cached image, so bouncing never stalls the loop.
 //!   3 off / black                [OFF_SECS ..)
 //!
 //! Any touch wakes (overlay pointer-down -> wake(), evdev watcher as backstop)
@@ -105,11 +106,12 @@ fn advance_bounce(
     bounced
 }
 
-/// Crop the centre TSxTS (square) of the map's last frame and push it as `tile-image`.
-fn capture_tile(map: &Rc<RefCell<MapLibre>>, ui: &crate::MapWindow) {
+/// Crop the centre TSxTS (square) of the map's last frame into a still image.
+/// Returns None if no frame is ready yet.
+fn capture_tile_image(map: &Rc<RefCell<MapLibre>>) -> Option<slint::Image> {
     let mut m = map.borrow_mut();
     if !m.has_frame() {
-        return;
+        return None;
     }
     let image = m.read_still_image();
     let buf = image.as_image();
@@ -119,7 +121,7 @@ fn capture_tile(map: &Rc<RefCell<MapLibre>>, ui: &crate::MapWindow) {
     let cw = TS as usize;
     let ch = TS as usize;
     if w < cw || h < ch || raw.len() < w * h * 4 {
-        return;
+        return None;
     }
     let x0 = (w - cw) / 2;
     let y0 = (h - ch) / 2;
@@ -132,7 +134,24 @@ fn capture_tile(map: &Rc<RefCell<MapLibre>>, ui: &crate::MapWindow) {
             dst[d..d + cw * 4].copy_from_slice(&raw[s..s + cw * 4]);
         }
     }
-    ui.set_tile_image(slint::Image::from_rgba8(spb));
+    Some(slint::Image::from_rgba8(spb))
+}
+
+/// All (style, region) pairs, shuffled, truncated to `n` (the pre-render set).
+fn build_combos(rng: &mut u64, n: usize) -> Vec<(usize, usize)> {
+    let mut all: Vec<(usize, usize)> = Vec::new();
+    for si in 0..STYLES.len() {
+        for ri in 0..REGIONS.len() {
+            all.push((si, ri));
+        }
+    }
+    for i in (1..all.len()).rev() {
+        *rng = lcg(*rng);
+        let j = (*rng >> 17) as usize % (i + 1);
+        all.swap(i, j);
+    }
+    all.truncate(n.max(1).min(all.len()));
+    all
 }
 
 pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
@@ -166,6 +185,7 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
     let off = env_secs("MAPLIBRE_OFF_SECS", 43200);
     let tile_zoom = env_f64("MAPLIBRE_TILE_ZOOM", TILE_ZOOM_DEFAULT);
     let load_secs = env_secs("MAPLIBRE_TILE_LOAD_SECS", 15);
+    let cache_target = env_secs("MAPLIBRE_TILE_CACHE", 8).max(1) as usize;
 
     let map_t = map.clone();
     let weak = ui.as_weak();
@@ -175,11 +195,16 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
     let mut bvx = 3.75f32;
     let mut bvy = 3.0f32;
     let mut ci = 0usize;
-    let mut need_new_tile = false;
     let mut loading = false;
     let mut load_start = 0u64;
     let mut saved: Option<(String, MapCamera)> = None;
     let mut rng = now_ms() | 1;
+
+    // Pre-rendered tile cache: bounce only swaps a cached image (no map work).
+    let mut tile_cache: Vec<slint::Image> = Vec::new();
+    let mut cache_show: usize = 0;
+    let mut combos: Vec<(usize, usize)> = Vec::new();
+    let mut combo_pos: usize = 0;
 
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(60), move || {
@@ -207,11 +232,16 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
                     m.fly_to(c.lat, c.lon, c.zoom);
                 }
                 loading = false;
-                need_new_tile = false;
+                tile_cache.clear();
+                combos.clear();
             }
             if stage == 2 {
-                // load the first tile as soon as we enter the tile stage
-                need_new_tile = true;
+                // Plan the pre-render set; tiles fill the cache one at a time.
+                combos = build_combos(&mut rng, cache_target);
+                combo_pos = 0;
+                cache_show = 0;
+                tile_cache.clear();
+                loading = false;
             }
             eprintln!("[saver] stage -> {} (idle {}s)", stage, idle);
             prev_stage = stage;
@@ -236,37 +266,51 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
                 ui.window().request_redraw();
             }
             2 => {
-                // Switch region/style on every wall bounce (and on stage entry).
-                if need_new_tile && !loading {
-                    rng = lcg(rng);
-                    let si = (rng >> 17) as usize % STYLES.len();
-                    rng = lcg(rng);
-                    let ri = (rng >> 17) as usize % REGIONS.len();
-                    let (lat, lon) = REGIONS[ri];
-                    {
-                        let mut m = map_t.borrow_mut();
-                        m.load_style(STYLES[si]);
-                        m.fly_to(lat, lon, tile_zoom);
+                // Warm-up: pre-render the planned tiles into the cache, one at a
+                // time. The map only renders during this phase; once the cache is
+                // full we stop rendering entirely, so bouncing stays smooth.
+                if tile_cache.len() < combos.len() {
+                    if !loading {
+                        let (si, ri) = combos[combo_pos % combos.len()];
+                        let (lat, lon) = REGIONS[ri];
+                        {
+                            let mut m = map_t.borrow_mut();
+                            m.load_style(STYLES[si]);
+                            m.fly_to(lat, lon, tile_zoom);
+                        }
+                        loading = true;
+                        load_start = now_ms();
+                        ui.set_map_render_active(true);
+                        eprintln!(
+                            "[saver] prerender {}/{} style#{} region={:.3},{:.3} zoom={}",
+                            tile_cache.len() + 1,
+                            combos.len(),
+                            si,
+                            lat,
+                            lon,
+                            tile_zoom
+                        );
+                    } else if now_ms().saturating_sub(load_start) >= load_secs * 1000 {
+                        if let Some(img) = capture_tile_image(&map_t) {
+                            if tile_cache.is_empty() {
+                                ui.set_tile_image(img.clone()); // show the first as soon as ready
+                            }
+                            tile_cache.push(img);
+                        }
+                        loading = false;
+                        combo_pos += 1;
+                        if tile_cache.len() >= combos.len() {
+                            ui.set_map_render_active(false);
+                            eprintln!("[saver] prerender complete ({} tiles)", tile_cache.len());
+                        }
                     }
-                    loading = true;
-                    load_start = now_ms();
-                    need_new_tile = false;
-                    ui.set_map_render_active(true);
-                    eprintln!(
-                        "[saver] tile switch style#{} region={:.3},{:.3} zoom={}",
-                        si, lat, lon, tile_zoom
-                    );
                 }
-                if loading && now_ms().saturating_sub(load_start) >= load_secs * 1000 {
-                    capture_tile(&map_t, &ui);
-                    loading = false;
-                    // dwell until the next bounce after this capture
-                    need_new_tile = false;
-                    ui.set_map_render_active(false);
-                }
+
+                // Bounce only swaps to the next cached tile: no map work, no freeze.
                 let bounced = advance_bounce(&mut bx, &mut by, &mut bvx, &mut bvy, &mut ci, TS, TS);
-                if bounced && !loading {
-                    need_new_tile = true;
+                if bounced && !tile_cache.is_empty() {
+                    cache_show = (cache_show + 1) % tile_cache.len();
+                    ui.set_tile_image(tile_cache[cache_show].clone());
                 }
                 ui.set_logo_x(bx);
                 ui.set_logo_y(by);
