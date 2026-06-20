@@ -123,14 +123,14 @@ export component MapWindow inherits Window {
             height: 84px;
         }
 
-        // Stage 2: bouncing map tile (random region/style, captured by Rust).
+        // Stage 2: bouncing square map tile (random region/style, captured by Rust).
         if root.saver-state == 2: Image {
             source: root.tile-image;
             image-fit: fill;
             x: root.logo-x;
             y: root.logo-y;
             width: 140px;
-            height: 84px;
+            height: 140px;
         }
     }
 }

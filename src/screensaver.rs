@@ -6,10 +6,10 @@
 //!
 //!   0 normal
 //!   1 DVD logo bounce            [SAVER_SECS .. SAVER_SECS+DVD_SECS)
-//!   2 bouncing map tile          [SAVER_SECS+DVD_SECS .. OFF_SECS)
-//!       random region + style, re-picked every TILE_CHANGE_SECS; the map is
-//!       rendered for ~TILE_LOAD_SECS, its centre is cropped to the logo size
-//!       and bounced as a still image (cheap once captured)
+//!   2 bouncing square map tile   [SAVER_SECS+DVD_SECS .. OFF_SECS)
+//!       random region + style, re-picked on every wall bounce; the map is
+//!       rendered for ~TILE_LOAD_SECS at MAPLIBRE_TILE_ZOOM, its centre is
+//!       cropped square and bounced as a still image (cheap once captured)
 //!   3 off / black                [OFF_SECS ..)
 //!
 //! Any touch wakes (overlay pointer-down -> wake(), evdev watcher as backstop)
@@ -39,12 +39,13 @@ const REGIONS: [(f64, f64); 4] = [
     (35.6895, 139.6917), // Tokyo
     (34.3853, 132.4553), // Hiroshima
 ];
-const TILE_ZOOM: f64 = 13.0;
+const TILE_ZOOM_DEFAULT: f64 = 4.0;
 
 const W: f32 = 480.0;
 const H: f32 = 320.0;
-const LW: f32 = 140.0;
+const LW: f32 = 140.0; // DVD logo (stage 1)
 const LH: f32 = 84.0;
+const TS: f32 = 140.0; // square map tile (stage 2)
 const COLORS: [u32; 6] = [0xff5050, 0x50c8ff, 0x78ff78, 0xffdc50, 0xdc78ff, 0xff9650];
 
 fn now_ms() -> u64 {
@@ -58,11 +59,25 @@ fn env_secs(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
 fn lcg(x: u64) -> u64 {
     x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
 }
 
-fn advance_bounce(x: &mut f32, y: &mut f32, vx: &mut f32, vy: &mut f32, ci: &mut usize) {
+/// Advance one tick and bounce off the walls of a `bw`x`bh` box.
+/// Returns true on the tick a wall was hit.
+fn advance_bounce(
+    x: &mut f32,
+    y: &mut f32,
+    vx: &mut f32,
+    vy: &mut f32,
+    ci: &mut usize,
+    bw: f32,
+    bh: f32,
+) -> bool {
     *x += *vx;
     *y += *vy;
     let mut bounced = false;
@@ -70,8 +85,8 @@ fn advance_bounce(x: &mut f32, y: &mut f32, vx: &mut f32, vy: &mut f32, ci: &mut
         *x = 0.0;
         *vx = (*vx).abs();
         bounced = true;
-    } else if *x + LW >= W {
-        *x = W - LW;
+    } else if *x + bw >= W {
+        *x = W - bw;
         *vx = -(*vx).abs();
         bounced = true;
     }
@@ -79,17 +94,18 @@ fn advance_bounce(x: &mut f32, y: &mut f32, vx: &mut f32, vy: &mut f32, ci: &mut
         *y = 0.0;
         *vy = (*vy).abs();
         bounced = true;
-    } else if *y + LH >= H {
-        *y = H - LH;
+    } else if *y + bh >= H {
+        *y = H - bh;
         *vy = -(*vy).abs();
         bounced = true;
     }
     if bounced {
         *ci = (*ci + 1) % COLORS.len();
     }
+    bounced
 }
 
-/// Crop the centre LWxLH of the map's last frame and push it as `tile-image`.
+/// Crop the centre TSxTS (square) of the map's last frame and push it as `tile-image`.
 fn capture_tile(map: &Rc<RefCell<MapLibre>>, ui: &crate::MapWindow) {
     let mut m = map.borrow_mut();
     if !m.has_frame() {
@@ -100,8 +116,8 @@ fn capture_tile(map: &Rc<RefCell<MapLibre>>, ui: &crate::MapWindow) {
     let w = buf.width() as usize;
     let h = buf.height() as usize;
     let raw = buf.as_raw();
-    let cw = LW as usize;
-    let ch = LH as usize;
+    let cw = TS as usize;
+    let ch = TS as usize;
     if w < cw || h < ch || raw.len() < w * h * 4 {
         return;
     }
@@ -148,7 +164,7 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
     let saver = env_secs("MAPLIBRE_SAVER_SECS", 300);
     let dvd = env_secs("MAPLIBRE_DVD_SECS", 1800);
     let off = env_secs("MAPLIBRE_OFF_SECS", 43200);
-    let tile_change = env_secs("MAPLIBRE_TILE_CHANGE_SECS", 900).max(1);
+    let tile_zoom = env_f64("MAPLIBRE_TILE_ZOOM", TILE_ZOOM_DEFAULT);
     let load_secs = env_secs("MAPLIBRE_TILE_LOAD_SECS", 15);
 
     let map_t = map.clone();
@@ -159,7 +175,7 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
     let mut bvx = 3.75f32;
     let mut bvy = 3.0f32;
     let mut ci = 0usize;
-    let mut cur_win: i64 = -1;
+    let mut need_new_tile = false;
     let mut loading = false;
     let mut load_start = 0u64;
     let mut saved: Option<(String, MapCamera)> = None;
@@ -190,8 +206,12 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
                     m.load_style(&s);
                     m.fly_to(c.lat, c.lon, c.zoom);
                 }
-                cur_win = -1;
                 loading = false;
+                need_new_tile = false;
+            }
+            if stage == 2 {
+                // load the first tile as soon as we enter the tile stage
+                need_new_tile = true;
             }
             eprintln!("[saver] stage -> {} (idle {}s)", stage, idle);
             prev_stage = stage;
@@ -204,7 +224,7 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
             3 => ui.set_map_render_active(false),
             1 => {
                 ui.set_map_render_active(false);
-                advance_bounce(&mut bx, &mut by, &mut bvx, &mut bvy, &mut ci);
+                advance_bounce(&mut bx, &mut by, &mut bvx, &mut bvy, &mut ci, LW, LH);
                 ui.set_logo_x(bx);
                 ui.set_logo_y(by);
                 let c = COLORS[ci];
@@ -216,9 +236,8 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
                 ui.window().request_redraw();
             }
             2 => {
-                let win = (idle.saturating_sub(saver + dvd) / tile_change) as i64;
-                if win != cur_win {
-                    cur_win = win;
+                // Switch region/style on every wall bounce (and on stage entry).
+                if need_new_tile && !loading {
                     rng = lcg(rng);
                     let si = (rng >> 17) as usize % STYLES.len();
                     rng = lcg(rng);
@@ -227,19 +246,28 @@ pub fn install(ui: &crate::MapWindow, map: &Rc<RefCell<MapLibre>>) {
                     {
                         let mut m = map_t.borrow_mut();
                         m.load_style(STYLES[si]);
-                        m.fly_to(lat, lon, TILE_ZOOM);
+                        m.fly_to(lat, lon, tile_zoom);
                     }
                     loading = true;
                     load_start = now_ms();
+                    need_new_tile = false;
                     ui.set_map_render_active(true);
-                    eprintln!("[saver] tile win={} style#{} region={:.3},{:.3}", win, si, lat, lon);
+                    eprintln!(
+                        "[saver] tile switch style#{} region={:.3},{:.3} zoom={}",
+                        si, lat, lon, tile_zoom
+                    );
                 }
                 if loading && now_ms().saturating_sub(load_start) >= load_secs * 1000 {
                     capture_tile(&map_t, &ui);
                     loading = false;
+                    // dwell until the next bounce after this capture
+                    need_new_tile = false;
                     ui.set_map_render_active(false);
                 }
-                advance_bounce(&mut bx, &mut by, &mut bvx, &mut bvy, &mut ci);
+                let bounced = advance_bounce(&mut bx, &mut by, &mut bvx, &mut bvy, &mut ci, TS, TS);
+                if bounced && !loading {
+                    need_new_tile = true;
+                }
                 ui.set_logo_x(bx);
                 ui.set_logo_y(by);
                 ui.window().request_redraw();
