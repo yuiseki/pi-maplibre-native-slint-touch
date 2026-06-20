@@ -1,0 +1,4 @@
+# Touch calibration for the ADS7846 resistive panel (raw ADC -> screen).
+# Swaps axes + inverts Y to match the rotated panel; libinput applies it.
+# Re-derive per panel by tapping known points; install to /etc/udev/rules.d/.
+SUBSYSTEM=="input", ATTRS{name}=="ADS7846 Touchscreen", ENV{LIBINPUT_CALIBRATION_MATRIX}="0 1.3175 -0.1566 -1.3759 0 1.2029"

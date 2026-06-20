@@ -1,0 +1,123 @@
+import { Button, VerticalBox, ComboBox, HorizontalBox, Slider } from "std-widgets.slint";
+import { MMapView, MMapAdapter } from "src/ui/maplibre.slint";
+
+export { MMapAdapter }
+
+export struct Size {
+    width: length,
+    height: length,
+}
+
+export component MapWindow inherits Window {
+    preferred-width: 800px;
+    preferred-height: 600px;
+
+    out property <Size> map-size: { width: map.width, height: map.height };
+    callback map-size-changed;
+    changed map-size => { map-size-changed(); }
+
+    // --- screensaver (driven from Rust) ---
+    // 0 = normal, 1 = screensaver (bouncing logo), 2 = off (black)
+    in property <int> saver-state: 0;
+    in property <length> logo-x: 40px;
+    in property <length> logo-y: 40px;
+    in property <brush> logo-color: #4af;
+    callback wake();
+
+    // Style list shown in the dropdown. Rust prepends MAPLIBRE_STYLE_URL when set.
+    in-out property <[string]> style-urls: [
+        "https://demotiles.maplibre.org/style.json",
+        "https://tile.openstreetmap.jp/styles/osm-bright/style.json",
+    ];
+    // Currently selected style (defaults to the first list entry).
+    property <string> current-style: root.style-urls[0];
+
+    VerticalBox {
+        HorizontalBox {
+            ComboBox {
+                model: root.style-urls;
+                current-index: 0;
+                selected(url) => {
+                    root.current-style = url;
+                }
+            }
+            Button {
+                text: "Paris";
+                clicked => { map.fly-to(48.8566, 2.3522, 10); }
+            }
+            Button {
+                text: "New York";
+                clicked => { map.fly-to(40.7128, -74.0060, 10); }
+            }
+            Button {
+                text: "Tokyo";
+                clicked => { map.fly-to(35.6895, 139.6917, 10); }
+            }
+            Text {
+                text: "Pitch:";
+                vertical-alignment: center;
+            }
+            Slider {
+                minimum: 0;
+                maximum: 100;
+                value: 0;
+                changed value => {
+                    map.set-pitch(self.value / 100 * 60);
+                }
+            }
+            Text {
+                text: "Bearing:";
+                vertical-alignment: center;
+            }
+            Slider {
+                minimum: 0;
+                maximum: 100;
+                value: 0;
+                changed value => {
+                    map.set-bearing(self.value / 100 * 360);
+                }
+            }
+            Text {
+                text: "Zoom: " + round(map.current-zoom);
+                vertical-alignment: center;
+            }
+        }
+        map := MMapView {
+            style-url: root.current-style;
+            center-lat: 0;
+            center-lon: 0;
+            zoom: 1;
+            // Stop the 16ms map render loop while the screensaver is up.
+            render-active: root.saver-state == 0;
+        }
+    }
+
+    // Screensaver overlay: covers the whole window when active. Any touch wakes.
+    if root.saver-state > 0: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: black;
+
+        TouchArea {
+            // Wake on any pointer-down (touch). The Rust evdev watcher is a backstop.
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.wake();
+                }
+            }
+        }
+
+        // Bouncing DVD-Video logo while in screensaver state (hidden when "off").
+        // colorize tints the logo's alpha silhouette with the current color
+        // (classic bouncing-DVD colour change on each bounce).
+        if root.saver-state == 1: Image {
+            source: @image-url("assets/dvd-logo.png");
+            colorize: root.logo-color;
+            image-fit: contain;
+            x: root.logo-x;
+            y: root.logo-y;
+            width: 140px;
+            height: 84px;
+        }
+    }
+}

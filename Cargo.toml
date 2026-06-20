@@ -1,0 +1,23 @@
+[package]
+name = "maplibre_native_slint"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+metal = ["maplibre_native/metal"]
+opengl = ["maplibre_native/opengl"]
+vulkan = ["maplibre_native/vulkan"]
+# Slint linuxkms backend (libseat-free) for console / embedded KMS (no X11/Wayland).
+linuxkms-noseat = ["slint/backend-linuxkms-noseat"]
+
+[dependencies]
+slint = "1.16"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+maplibre_native = { version = "0.8.2", features = ["opengl"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+maplibre_native = { version = "0.8.2", features = ["metal"] }
+
+[build-dependencies]
+slint-build = "1.16"
