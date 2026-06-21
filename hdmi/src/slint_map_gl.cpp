@@ -114,13 +114,12 @@ void SlintMapGL::render() {
     }
     const auto f2 = std::chrono::steady_clock::now();
 
-    // Render the map scene only when it actually changed (camera moved, tiles
-    // arrived, or a style/label animation is still pending). When maplibre is
-    // idle and nothing is dirty, skip the expensive scene render and let Slint
-    // re-present the last texture. Measurement showed a static map was costing
-    // ~11ms/frame on V3D for zero visual change, eating the frame's headroom.
-    const bool need_render = repaint.exchange(false) || !map_idle.load();
-    if (frontend && need_render) {
+    // NOTE: render-on-demand (skipping this when idle) is NOT viable here. V3D is
+    // a tiled GPU and does not preserve the FBO colour texture across frames when
+    // it is not re-rendered (the attachment is treated as transient and
+    // discarded), so skipping the render makes the borrowed texture go white when
+    // the camera is static. The texture must be re-rendered every frame.
+    if (frontend) {
         frontend->render();
     }
     const auto f3 = std::chrono::steady_clock::now();
