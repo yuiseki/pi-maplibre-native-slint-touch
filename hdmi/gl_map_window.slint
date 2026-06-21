@@ -21,9 +21,16 @@ export component MapWindow inherits Window {
     changed map-size => { map-size-changed(); }
 
     property <[string]> style-urls: [
+        "https://yuiseki.dev/static/styles/osm-bright.json",
+        "https://yuiseki.dev/static/styles/osm-fiord.json",
+        "https://tile.openstreetmap.jp/styles/osm-bright-ja/style.json",
+        "https://tile.openstreetmap.jp/styles/maptiler-basic-ja/style.json",
         "https://demotiles.maplibre.org/style.json",
-        "https://tile.openstreetmap.jp/styles/osm-bright/style.json",
     ];
+
+    // "Dance" toggle: drives the pitch/bearing animation in the C++ backend.
+    in-out property <bool> dancing: false;
+    callback set-dance(bool);
 
     // Outer margin: resistive panels have a dead zone at the very edges, so
     // keep all interactive controls inset from the screen border.
@@ -65,11 +72,29 @@ export component MapWindow inherits Window {
                 }
             }
 
-            map := MMapView {
-                style-url: "https://demotiles.maplibre.org/style.json";
-                center-lat: 0;
-                center-lon: 0;
-                zoom: 1;
+            // Map area with a floating Dance/Calm button at the bottom-left.
+            Rectangle {
+                vertical-stretch: 1;
+
+                map := MMapView {
+                    width: 100%;
+                    height: 100%;
+                    style-url: "https://yuiseki.dev/static/styles/osm-bright.json";
+                    center-lat: 0;
+                    center-lon: 0;
+                    zoom: 1;
+                }
+
+                Button {
+                    x: 8px;
+                    y: parent.height - self.height - 8px;
+                    min-height: 52px;
+                    text: root.dancing ? "Calm" : "Dance";
+                    clicked => {
+                        root.dancing = !root.dancing;
+                        root.set-dance(root.dancing);
+                    }
+                }
             }
         }
 

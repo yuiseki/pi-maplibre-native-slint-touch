@@ -98,8 +98,8 @@ void SlintMapGL::render() {
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - demo_start_)
                 .count();
-        const double pitch = 30.0 + 30.0 * std::sin(t * 0.8);  // 0..60 deg
-        const double bearing = std::fmod(t * 30.0, 360.0);     // 12s / turn
+        const double pitch = 30.0 * (1.0 - std::cos(t * 0.8));  // 0..60, eases up
+        const double bearing = std::fmod(t * 30.0, 360.0);      // 12s / turn
         map->jumpTo(mbgl::CameraOptions().withPitch(pitch).withBearing(bearing));
         map->triggerRepaint();
         repaint = true;
@@ -225,6 +225,20 @@ void SlintMapGL::set_bearing(double bearing) {
     map->jumpTo(mbgl::CameraOptions().withBearing(bearing));
     map->triggerRepaint();
     repaint = true;
+}
+
+void SlintMapGL::set_dance(bool on) {
+    demo_orientation_ = on;
+    std::cout << "[SlintMapGL] dance=" << (on ? "on" : "off") << std::endl;
+    if (on) {
+        // Restart the sweep phase so pitch eases up from the current (flat) view.
+        demo_start_ = std::chrono::steady_clock::now();
+    } else if (map) {
+        // Calm: reset tilt + rotation, keep the current center and zoom.
+        map->jumpTo(mbgl::CameraOptions().withPitch(0.0).withBearing(0.0));
+        map->triggerRepaint();
+        repaint = true;
+    }
 }
 
 void SlintMapGL::onWillStartLoadingMap() {

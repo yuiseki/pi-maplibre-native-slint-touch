@@ -195,6 +195,9 @@ int main(int /*argc*/, char** /*argv*/) {
 
     win->on_map_size_changed([=]() {});
 
+    // "Dance" button: start/stop the pitch+bearing animation at the current view.
+    win->on_set_dance([=](bool on) { smap->set_dance(on); });
+
     std::cout << "[main_gl] Entering UI event loop" << std::endl;
     win->run();
     return 0;
