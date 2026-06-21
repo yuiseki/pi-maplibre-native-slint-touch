@@ -1,4 +1,4 @@
-import { Button, VerticalBox, ComboBox, HorizontalBox, Slider } from "std-widgets.slint";
+import { Button, VerticalBox, ComboBox, HorizontalBox } from "std-widgets.slint";
 import { MMapView, MMapAdapter } from "src/ui/maplibre.slint";
 
 export { MMapAdapter }
@@ -9,8 +9,10 @@ export struct Size {
 }
 
 export component MapWindow inherits Window {
-    preferred-width: 800px;
-    preferred-height: 600px;
+    // Native size of the target SPI panel (Osoyoo 3.5B, 480x320).
+    preferred-width: 480px;
+    preferred-height: 320px;
+    default-font-size: 16px;
 
     out property <Size> map-size: { width: map.width, height: map.height };
     callback map-size-changed;
@@ -34,64 +36,93 @@ export component MapWindow inherits Window {
     // Currently selected style (defaults to the first list entry).
     property <string> current-style: root.style-urls[0];
 
-    VerticalBox {
-        HorizontalBox {
-            ComboBox {
-                model: root.style-urls;
-                current-index: 0;
-                selected(url) => {
-                    root.current-style = url;
+    // Pi / small resistive-touch-panel layout (480x320 native).
+    //
+    // Tuned for a slow SPI panel and single-touch resistive input:
+    //   - Large touch targets (bigger font, tall toolbar, wide zoom strip).
+    //   - An outer margin, because resistive panels have a dead zone at the
+    //     very edge where taps do not register.
+    //   - NO flyTo animation and NO stepless zoom slider: the software renderer
+    //     on this panel is slow, so camera moves are instant jumps (this repo's
+    //     `fly-to` already jumps, it does not animate) and zoom is stepped via
+    //     +/- buttons (each press is one discrete `wheel-zoomed` step).
+    //   - No Pitch/Bearing sliders (not useful at this size, and they cost taps).
+    HorizontalBox {
+        padding: 14px;
+        spacing: 10px;
+
+        VerticalBox {
+            horizontal-stretch: 1;
+            padding: 0px;
+            spacing: 6px;
+
+            HorizontalBox {
+                min-height: 48px;
+                max-height: 48px;
+                spacing: 6px;
+                ComboBox {
+                    horizontal-stretch: 2;
+                    model: root.style-urls;
+                    current-index: 0;
+                    selected(url) => { root.current-style = url; }
+                }
+                Button {
+                    horizontal-stretch: 1;
+                    text: "Paris";
+                    clicked => { map.fly-to(48.8566, 2.3522, 10); }
+                }
+                Button {
+                    horizontal-stretch: 1;
+                    text: "NY";
+                    clicked => { map.fly-to(40.7128, -74.0060, 10); }
+                }
+                Button {
+                    horizontal-stretch: 1;
+                    text: "Tokyo";
+                    clicked => { map.fly-to(35.6895, 139.6917, 10); }
                 }
             }
-            Button {
-                text: "Paris";
-                clicked => { map.fly-to(48.8566, 2.3522, 10); }
-            }
-            Button {
-                text: "New York";
-                clicked => { map.fly-to(40.7128, -74.0060, 10); }
-            }
-            Button {
-                text: "Tokyo";
-                clicked => { map.fly-to(35.6895, 139.6917, 10); }
-            }
-            Text {
-                text: "Pitch:";
-                vertical-alignment: center;
-            }
-            Slider {
-                minimum: 0;
-                maximum: 100;
-                value: 0;
-                changed value => {
-                    map.set-pitch(self.value / 100 * 60);
-                }
-            }
-            Text {
-                text: "Bearing:";
-                vertical-alignment: center;
-            }
-            Slider {
-                minimum: 0;
-                maximum: 100;
-                value: 0;
-                changed value => {
-                    map.set-bearing(self.value / 100 * 360);
-                }
-            }
-            Text {
-                text: "Zoom: " + round(map.current-zoom);
-                vertical-alignment: center;
+
+            map := MMapView {
+                style-url: root.current-style;
+                center-lat: 0;
+                center-lon: 0;
+                zoom: 1;
+                // Render loop gate, controlled from Rust (off during screensaver,
+                // briefly on while a tile is being captured).
+                render-active: root.map-render-active;
             }
         }
-        map := MMapView {
-            style-url: root.current-style;
-            center-lat: 0;
-            center-lon: 0;
-            zoom: 1;
-            // Render loop gate, controlled from Rust (off during screensaver,
-            // briefly on while a tile is being captured).
-            render-active: root.map-render-active;
+
+        // Right-edge vertical zoom strip. Stepped only (no stepless slider):
+        // each tap is one `wheel-zoomed` step. delta < 0 zooms in, delta > 0
+        // zooms out (see headless.rs `wheel_zoomed`).
+        VerticalBox {
+            horizontal-stretch: 0;
+            min-width: 72px;
+            max-width: 72px;
+            padding: 0px;
+            spacing: 8px;
+
+            Button {
+                vertical-stretch: 1;
+                text: "+";
+                clicked => {
+                    MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, -1);
+                }
+            }
+            Text {
+                text: "Z " + round(map.current-zoom);
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Button {
+                vertical-stretch: 1;
+                text: "-";
+                clicked => {
+                    MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, 1);
+                }
+            }
         }
     }
 
