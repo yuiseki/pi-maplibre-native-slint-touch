@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <mbgl/map/camera.hpp>
@@ -64,6 +65,9 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
     if (const char* e = std::getenv("MAPLIBRE_ORIENTATION_DEMO")) {
         demo_orientation_ = (std::atoi(e) != 0);
     }
+    if (const char* e = std::getenv("MAPLIBRE_PERF")) {
+        perf_log_ = (std::atoi(e) != 0);
+    }
     demo_start_ = std::chrono::steady_clock::now();
     fps_last_ = demo_start_;
 
@@ -86,9 +90,13 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
 }
 
 void SlintMapGL::render() {
+    using msd = std::chrono::duration<double, std::milli>;
+    const auto f0 = std::chrono::steady_clock::now();
+
     if (run_loop) {
         run_loop->runOnce();
     }
+    const auto f1 = std::chrono::steady_clock::now();
 
     // Orientation perf demo: drive pitch + bearing every frame, the way a
     // tilt/compass sensor feed eventually will, to measure how fast the panel
@@ -104,19 +112,77 @@ void SlintMapGL::render() {
         map->triggerRepaint();
         repaint = true;
     }
+    const auto f2 = std::chrono::steady_clock::now();
 
-    if (frontend) {
+    // Render the map scene only when it actually changed (camera moved, tiles
+    // arrived, or a style/label animation is still pending). When maplibre is
+    // idle and nothing is dirty, skip the expensive scene render and let Slint
+    // re-present the last texture. Measurement showed a static map was costing
+    // ~11ms/frame on V3D for zero visual change, eating the frame's headroom.
+    const bool need_render = repaint.exchange(false) || !map_idle.load();
+    if (frontend && need_render) {
         frontend->render();
     }
+    const auto f3 = std::chrono::steady_clock::now();
 
-    // Effective frame-rate log (every ~2s of wall time).
     ++fps_frames_;
+
+    if (perf_log_) {
+        const double t_rl = msd(f1 - f0).count();   // run_loop (tile processing)
+        const double t_rn = msd(f3 - f2).count();   // frontend->render (V3D GPU)
+        const double t_frame =
+            (last_frame_.time_since_epoch().count() == 0)
+                ? 0.0
+                : msd(f0 - last_frame_).count();     // wall interval between frames
+        last_frame_ = f0;
+
+        acc_rl_ms_ += t_rl;
+        acc_rn_ms_ += t_rn;
+        if (t_rl > max_rl_ms_) max_rl_ms_ = t_rl;
+        if (t_rn > max_rn_ms_) max_rn_ms_ = t_rn;
+        if (t_frame > 0.0) {
+            acc_frame_ms_ += t_frame;
+            if (t_frame > max_frame_ms_) max_frame_ms_ = t_frame;
+            if (t_frame > 33.0) {  // slower than ~30fps: a visible stutter frame
+                ++slow_frames_;
+                slow_frame_ms_ += t_frame;
+                slow_rl_ms_ += t_rl;
+                slow_rn_ms_ += t_rn;
+            }
+        }
+    }
+
     const auto now = std::chrono::steady_clock::now();
     const double dt = std::chrono::duration<double>(now - fps_last_).count();
     if (dt >= 2.0) {
-        std::cout << "[perf] " << (fps_frames_ / dt) << " fps"
-                  << (demo_orientation_ ? " (pitch+bearing sweep)" : "")
-                  << std::endl;
+        if (perf_log_ && fps_frames_ > 0) {
+            const int n = fps_frames_;
+            std::printf(
+                "[perf] %.1f fps | frame avg %.1f max %.1f | runloop avg %.2f "
+                "max %.2f | render avg %.2f max %.2f | slow>33ms %d",
+                n / dt, acc_frame_ms_ / n, max_frame_ms_, acc_rl_ms_ / n,
+                max_rl_ms_, acc_rn_ms_ / n, max_rn_ms_, slow_frames_);
+            if (slow_frames_ > 0) {
+                // Per slow frame: which segment dominated the overrun?
+                // "other" = Slint UI compositing + present + vsync wait.
+                std::printf(
+                    " [slow avg ms: frame %.1f = runloop %.2f + render %.2f + "
+                    "other %.2f]",
+                    slow_frame_ms_ / slow_frames_, slow_rl_ms_ / slow_frames_,
+                    slow_rn_ms_ / slow_frames_,
+                    (slow_frame_ms_ - slow_rl_ms_ - slow_rn_ms_) / slow_frames_);
+            }
+            std::printf("%s\n", demo_orientation_ ? " (sweep)" : "");
+            std::fflush(stdout);
+            acc_frame_ms_ = acc_rl_ms_ = acc_rn_ms_ = 0.0;
+            max_frame_ms_ = max_rl_ms_ = max_rn_ms_ = 0.0;
+            slow_frame_ms_ = slow_rl_ms_ = slow_rn_ms_ = 0.0;
+            slow_frames_ = 0;
+        } else if (!perf_log_) {
+            std::cout << "[perf] " << (fps_frames_ / dt) << " fps"
+                      << (demo_orientation_ ? " (pitch+bearing sweep)" : "")
+                      << std::endl;
+        }
         fps_frames_ = 0;
         fps_last_ = now;
     }

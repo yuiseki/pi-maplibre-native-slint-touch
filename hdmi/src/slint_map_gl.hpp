@@ -112,6 +112,17 @@ private:
     std::chrono::steady_clock::time_point fps_last_{};
     int fps_frames_ = 0;
 
+    // Frame-timing instrumentation (enabled by MAPLIBRE_PERF != 0). Splits each
+    // frame into run_loop (tile/result processing) vs frontend->render (V3D GPU)
+    // vs "other" (Slint UI compositing + present + vsync wait), and flags slow
+    // frames (>33ms) to localize stutter.
+    bool perf_log_ = false;
+    std::chrono::steady_clock::time_point last_frame_{};
+    double acc_frame_ms_ = 0.0, acc_rl_ms_ = 0.0, acc_rn_ms_ = 0.0;
+    double max_frame_ms_ = 0.0, max_rl_ms_ = 0.0, max_rn_ms_ = 0.0;
+    double slow_frame_ms_ = 0.0, slow_rl_ms_ = 0.0, slow_rn_ms_ = 0.0;
+    int slow_frames_ = 0;
+
     // Manual double-tap detection (touchscreens rarely emit Slint
     // double-clicked).
     std::chrono::steady_clock::time_point last_tap_{};
