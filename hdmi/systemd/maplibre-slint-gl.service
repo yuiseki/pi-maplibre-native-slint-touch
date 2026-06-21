@@ -1,0 +1,32 @@
+[Unit]
+Description=maplibre-native-slint zero-copy GL map (HDMI / V3D GPU) for Raspberry Pi
+After=multi-user.target network-online.target seatd.service
+Wants=network-online.target
+Requires=seatd.service
+
+[Service]
+Type=simple
+User=yuiseki
+# DRM master via seatd/libseat; input for the touch panel.
+SupplementaryGroups=video render input
+# Slint linuxkms backend with libseat (seatd grants DRM master without a
+# seat/login session or an active VT). NOT the -noseat variant (that is the SPI
+# software path).
+Environment=SLINT_BACKEND=linuxkms
+# Build-host libs the display host lacks (libslint_cpp, libcpr, libicu*.72,
+# libpng16). Populate ~/mls-libs once (see README).
+Environment=LD_LIBRARY_PATH=/home/yuiseki/mls-libs
+# Initial style; also appears in the dropdown.
+Environment=MAPLIBRE_STYLE_URL=https://yuiseki.dev/static/styles/osm-bright.json
+# Optional:
+#   MAPLIBRE_WIDTH / MAPLIBRE_HEIGHT  render size (default: the display resolution)
+#   MAPLIBRE_FLY_MS                   flyTo duration for the city buttons (default 2500)
+WorkingDirectory=/home/yuiseki
+ExecStart=/home/yuiseki/maplibre-slint-gl
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
