@@ -106,7 +106,10 @@ void SlintMapGL::render() {
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - demo_start_)
                 .count();
-        const double pitch = 30.0 * (1.0 - std::cos(t * 0.8));  // 0..60, eases up
+        // Cap pitch at 45 (not 60): beyond ~45 the frustum reaches far toward
+        // the horizon and the visible tile count explodes, which is what spikes
+        // V3D render time. 45 keeps the dance lively but much smoother.
+        const double pitch = 22.5 * (1.0 - std::cos(t * 0.8));  // 0..45, eases up
         const double bearing = std::fmod(t * 30.0, 360.0);      // 12s / turn
         map->jumpTo(mbgl::CameraOptions().withPitch(pitch).withBearing(bearing));
         map->triggerRepaint();
