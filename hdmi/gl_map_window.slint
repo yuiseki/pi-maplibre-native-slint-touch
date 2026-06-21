@@ -29,6 +29,9 @@ export component MapWindow inherits Window {
     // keep all interactive controls inset from the screen border.
     HorizontalBox {
         padding: 22px;
+        // The very top edge of this resistive panel has a wider dead zone, so
+        // inset the top further to keep the toolbar reliably tappable.
+        padding-top: 48px;
         spacing: 10px;
 
         VerticalBox {

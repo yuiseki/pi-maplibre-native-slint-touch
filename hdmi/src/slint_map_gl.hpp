@@ -101,6 +101,14 @@ private:
     int frame_count_ = 0;
     int fly_ms_ = 2500;  // flyTo duration; override with MAPLIBRE_FLY_MS
 
+    // Orientation perf demo: when MAPLIBRE_ORIENTATION_DEMO!=0, sweep pitch and
+    // bearing every frame (a stand-in for a future tilt/compass sensor feed) and
+    // log the effective frame rate. Off by default.
+    bool demo_orientation_ = false;
+    std::chrono::steady_clock::time_point demo_start_{};
+    std::chrono::steady_clock::time_point fps_last_{};
+    int fps_frames_ = 0;
+
     // Manual double-tap detection (touchscreens rarely emit Slint
     // double-clicked).
     std::chrono::steady_clock::time_point last_tap_{};

@@ -61,6 +61,24 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
             fly_ms_ = v;
     }
 
+    if (const char* e = std::getenv("MAPLIBRE_ORIENTATION_DEMO")) {
+        demo_orientation_ = (std::atoi(e) != 0);
+    }
+    demo_start_ = std::chrono::steady_clock::now();
+    fps_last_ = demo_start_;
+
+    // Tile prefetching: request parent (zoom - delta) tiles first so a coarse
+    // full map shows immediately during flyTo / continuous pitch+bearing moves,
+    // instead of blank pop-in. maplibre's default delta is 4; override with
+    // MAPLIBRE_PREFETCH_DELTA (0 disables).
+    if (const char* e = std::getenv("MAPLIBRE_PREFETCH_DELTA")) {
+        int d = std::atoi(e);
+        if (d >= 0 && d <= 255)
+            map->setPrefetchZoomDelta(static_cast<uint8_t>(d));
+    }
+    std::cout << "[SlintMapGL] prefetchZoomDelta="
+              << static_cast<int>(map->getPrefetchZoomDelta()) << std::endl;
+
     map->getStyle().loadURL(styleUrl);
     map->jumpTo(mbgl::CameraOptions()
                     .withCenter(mbgl::LatLng{35.681, 139.767})
@@ -71,9 +89,38 @@ void SlintMapGL::render() {
     if (run_loop) {
         run_loop->runOnce();
     }
+
+    // Orientation perf demo: drive pitch + bearing every frame, the way a
+    // tilt/compass sensor feed eventually will, to measure how fast the panel
+    // can follow continuous camera changes.
+    if (demo_orientation_ && map) {
+        const double t =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - demo_start_)
+                .count();
+        const double pitch = 30.0 + 30.0 * std::sin(t * 0.8);  // 0..60 deg
+        const double bearing = std::fmod(t * 30.0, 360.0);     // 12s / turn
+        map->jumpTo(mbgl::CameraOptions().withPitch(pitch).withBearing(bearing));
+        map->triggerRepaint();
+        repaint = true;
+    }
+
     if (frontend) {
         frontend->render();
     }
+
+    // Effective frame-rate log (every ~2s of wall time).
+    ++fps_frames_;
+    const auto now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(now - fps_last_).count();
+    if (dt >= 2.0) {
+        std::cout << "[perf] " << (fps_frames_ / dt) << " fps"
+                  << (demo_orientation_ ? " (pitch+bearing sweep)" : "")
+                  << std::endl;
+        fps_frames_ = 0;
+        fps_last_ = now;
+    }
+
     if ((frame_count_++ % 300) == 0) {
         std::cout << "[SlintMapGL] render frame=" << frame_count_
                   << " style_loaded=" << style_loaded.load() << std::endl;
