@@ -13,8 +13,9 @@ were contributed back separately:
 - maplibre/maplibre-native-slint#67: surface `MAPLIBRE_STYLE_URL` in the style dropdown
 
 Verified on: build host **Raspberry Pi 5 (Debian 12 / bookworm)**, display host
-**Raspberry Pi 4 (Debian 13 / trixie)** driving a **480x320 ILI9486 SPI TFT**
-(the `fb_ili9486` fbtft staging driver, exposed only as `/dev/fb0`) with an
+**Raspberry Pi 4 (Debian 13 / trixie)** driving an **Osoyoo 3.5B 480x320 SPI
+TFT**. Its controller is an **ILI9488** (driven by the `fb_ili9486` fbtft staging
+driver with an ILI9488-specific init, exposed only as `/dev/fb0`), with an
 ADS7846 resistive touch panel. Both `aarch64`. Renders MapLibre demo tiles and PMTiles.
 
 ## What's here
@@ -26,6 +27,85 @@ ADS7846 resistive touch panel. Both `aarch64`. Renders MapLibre demo tiles and P
   consumes pointer events; a timer drives the state.
 - `assets/dvd-logo.png`: the bouncing logo (colorized per bounce).
 - `systemd/maplibre-slint.service`, `udev/99-ads7846-calib.rules`, `scripts/`.
+
+## Display setup: device-tree overlay (bringing up `/dev/fb0`)
+
+Everything else assumes `/dev/fb0` already exists. On this panel that is **not
+automatic**: the SPI display needs a device-tree overlay loaded at boot, and it
+has to be the **right** one. This is the single most error-prone step, so it is
+documented in full.
+
+### The controller is ILI9488, not ILI9486
+
+The fbtft module that binds is named `fb_ili9486`, which is misleading: the actual
+controller on the Osoyoo 3.5B is an **ILI9488**. The two are similar but need
+**different init sequences**. Driving it with a generic ILI9486 overlay produces a
+**fully white screen** even though every other signal looks healthy (the driver
+binds, `/dev/fb0` appears at the right size, the app renders frames).
+
+### Correct overlay: `osoyoo35b`
+
+Osoyoo ships a prebuilt overlay. Install it and point `config.txt` at it:
+
+```bash
+# on the display host
+cd /tmp
+curl -fsSL https://osoyoo.com/driver/osoyoo35b.zip -o osoyoo35b.zip
+unzip -o osoyoo35b.zip
+sudo cp osoyoo35b/osoyoo35b.dtbo /boot/firmware/overlays/osoyoo35b.dtbo
+```
+
+Then in `/boot/firmware/config.txt`:
+
+```
+dtparam=spi=on
+dtoverlay=osoyoo35b:speed=20000000
+```
+
+and reboot. A correct bring-up looks like this in `dmesg`:
+
+```
+graphics fb0: fb_ili9486 frame buffer, 480x320, 300 KiB video memory, 32 KiB buffer memory, fps=31, spi0.0 at 20 MHz
+input: ADS7846 Touchscreen as .../input/inputN
+```
+
+The overlay uses the `fb_ili9486` driver but supplies an **ILI9488 init sequence**
+(gamma `0xE0`/`0xE1`, power `0xC0`/`0xC1`/`0xC5`, `MADCTL 0x36=0x48`, pixel format
+`0x3A=0x55`), with `txbuflen=0x8000`, `rotate=270`, `fps=30`, reset on GPIO25, D/C
+on GPIO24, and the ADS7846 touch controller on CE1. The `:speed=20000000` pins the
+SPI clock at a stable 20 MHz.
+
+### Do NOT use `dtoverlay=piscreen` (or other generic ILI9486 overlays)
+
+`piscreen` binds the same `fb_ili9486` driver and `/dev/fb0` appears with the
+correct size, but it loads the **ILI9486** init, which this **ILI9488** panel does
+not accept. Symptom: the **panel stays white** while `/dev/fb0` actually holds a
+correctly rendered frame. You can confirm the framebuffer is fine (and isolate the
+problem to the panel init) with:
+
+```bash
+# many distinct 16-bit values = a real image is in fb0; if the panel is still
+# white, the controller was initialized with the wrong sequence
+sudo od -An -tx2 /dev/fb0 | tr -s ' ' '\n' | sort | uniq -c | sort -rn | head
+```
+
+The current kernel has no ILI9488 fbtft driver and no `flexfb`, and the mainline
+`fbtft` overlay cannot inject a raw init sequence, so the Osoyoo `osoyoo35b.dtbo`
+is the only practical option here.
+
+### If `/dev/fb0` is missing
+
+If the overlay line is removed or commented out (for example after experimenting
+with HDMI), `/dev/fb0` never appears and the software renderer cannot start. The
+service then crash-loops with:
+
+```
+Error from Software renderer: Could not open any legacy framebuffers.
+Error using /dev/fb0: ... No such file or directory
+No renderers configured.
+```
+
+Re-add `dtoverlay=osoyoo35b:speed=20000000` and reboot.
 
 ## Display stack: why this is software-only (and why that is correct here)
 
@@ -62,9 +142,10 @@ Rendering at 480x320
 
 ### Why none of the GPU renderers can be used here
 
-The 480x320 LCD is an **ILI9486 SPI panel driven by the `fbtft` staging driver**.
-It is a **legacy framebuffer only** (`/dev/fb0`, name `fb_ili9486`). It is **not a
-DRM/KMS device**: it has no DRM connector and no CRTC.
+The 480x320 LCD is an **Osoyoo 3.5B (ILI9488 controller) SPI panel driven by the
+`fbtft` staging driver** (the `fb_ili9486` module). It is a **legacy framebuffer
+only** (`/dev/fb0`, name `fb_ili9486`). It is **not a DRM/KMS device**: it has no
+DRM connector and no CRTC.
 
 The actual DRM/KMS cards on the Pi 4 are:
 
