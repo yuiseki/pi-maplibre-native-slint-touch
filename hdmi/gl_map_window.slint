@@ -32,6 +32,37 @@ export component MapWindow inherits Window {
     in-out property <bool> dancing: false;
     callback set-dance(bool);
 
+    // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
+    // on startup (init below) so the arrows do NOT land on the zoom Slider (which
+    // would otherwise consume Up/Down as zoom). Unhandled keys from other widgets
+    // bubble up to this ancestor scope, so panning works whatever has focus,
+    // except the Slider itself.
+    callback pan(/* dx */ float, /* dy */ float);
+    init => { keys.focus(); }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.UpArrow) {
+                if (event.modifiers.shift) {
+                    MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, -1);
+                } else {
+                    root.pan(0, 80);
+                }
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                if (event.modifiers.shift) {
+                    MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, 1);
+                } else {
+                    root.pan(0, -80);
+                }
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) { root.pan(80, 0); return accept; }
+            if (event.text == Key.RightArrow) { root.pan(-80, 0); return accept; }
+            return reject;
+        }
+
     // Outer margin: resistive panels have a dead zone at the very edges, so
     // keep all interactive controls inset from the screen border.
     HorizontalBox {
@@ -130,4 +161,5 @@ export component MapWindow inherits Window {
             }
         }
     }
+    } // keys (FocusScope)
 }

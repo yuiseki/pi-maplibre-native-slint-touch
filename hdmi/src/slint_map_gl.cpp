@@ -228,6 +228,14 @@ void SlintMapGL::handle_mouse_move(float x, float y, bool pressed) {
     repaint = true;
 }
 
+void SlintMapGL::handle_pan(float dx, float dy) {
+    if (!map) return;
+    map->moveBy(mbgl::ScreenCoordinate{static_cast<double>(dx),
+                                       static_cast<double>(dy)});
+    map->triggerRepaint();
+    repaint = true;
+}
+
 void SlintMapGL::handle_wheel_zoom(float x, float y, float dy) {
     if (!map)
         return;

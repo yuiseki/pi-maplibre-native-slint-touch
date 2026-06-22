@@ -198,6 +198,9 @@ int main(int /*argc*/, char** /*argv*/) {
     // "Dance" button: start/stop the pitch+bearing animation at the current view.
     win->on_set_dance([=](bool on) { smap->set_dance(on); });
 
+    // Keyboard arrow-key pan (Shift+Up/Down zoom is handled in the .slint).
+    win->on_pan([=](float dx, float dy) { smap->handle_pan(dx, dy); });
+
     std::cout << "[main_gl] Entering UI event loop" << std::endl;
     win->run();
     return 0;

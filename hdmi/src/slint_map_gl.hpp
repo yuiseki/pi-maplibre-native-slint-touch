@@ -64,6 +64,7 @@ public:
     void handle_mouse_move(float x, float y, bool pressed);
     void handle_wheel_zoom(float x, float y, float dy);
     void handle_double_click(float x, float y, bool shift);
+    void handle_pan(float dx, float dy);  // keyboard arrow-key pan (screen px)
 
     // Commands from the toolbar (dropdown / buttons / sliders).
     void setStyleUrl(const std::string& url);
