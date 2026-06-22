@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Switch pi4-s-d back to the MAP (zero-copy GL) from the console shell.
+# Writes a request the supervisor watches; it stops the console and starts the map.
+mkdir -p /tmp/pi-display
+printf 'map\n' > /tmp/pi-display/request
+echo "requested MAP (the screen will switch in a moment)"

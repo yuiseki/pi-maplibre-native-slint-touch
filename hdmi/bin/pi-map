@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Alias of pi-maps: switch back to the MAP.
+mkdir -p /tmp/pi-display
+printf 'map\n' > /tmp/pi-display/request
+echo "requested MAP (the screen will switch in a moment)"

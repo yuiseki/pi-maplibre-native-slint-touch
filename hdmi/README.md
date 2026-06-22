@@ -96,6 +96,42 @@ hdmi/scripts/run.sh             # tmux session 'mapgl'; logs to ~/map-gl.log
 | `MAPLIBRE_PREFETCH_DELTA` | `Map::setPrefetchZoomDelta`: request `zoom - delta` parent tiles first so a coarse map shows during loads instead of blank pop-in (maplibre default 4; 0 disables). Affects what shows during a load, not the frame rate. |
 | `MAPLIBRE_ORIENTATION_DEMO` | When `1`, sweep pitch (0..60) and bearing continuously every frame and log `[perf] N fps`. A stand-in for a future tilt/compass sensor feed; use it to gauge how the panel follows continuous camera changes. |
 
+## Input: touch, mouse, keyboard + the map/terminal switch
+
+The map is operable three ways: the resistive **touch** panel, a **mouse** (a USB
+or 2.4 GHz dongle pointer drives the Slint UI cursor via libinput), and a
+**keyboard** for the terminal switch below.
+
+`supervisor.py` (run by the systemd unit instead of the binary directly) toggles
+between the map and a native console, the way the Display HAT Mini build
+([pi-z2-display-hat-mini](https://github.com/yuiseki/pi-z2-display-hat-mini))
+does, but here the "terminal" is simply the Linux console on `tty1`:
+
+- **MAP** (default): the supervisor runs `maplibre-slint-gl` (it holds the HDMI
+  via seatd/libseat).
+- **Ctrl+C twice within 1.5 s** on the keyboard -> the supervisor stops the map;
+  releasing DRM lets the `tty1` console (fbcon) reappear on the HDMI = **TERMINAL**.
+- In that shell, run **`pi-maps`** (or `pi-map`) -> the supervisor restarts the map.
+
+The supervisor reads the keyboard directly from `/dev/input/by-id/*-event-kbd`
+(raw `input_event`, no `python3-evdev` needed); Slint/libinput does not grab it
+exclusively, so both see the keys, and Ctrl+C x2 only acts while in MAP.
+
+Install (in addition to the binary + `~/mls-libs`):
+
+```bash
+cp hdmi/supervisor.py ~/pi-display-supervisor.py
+sudo cp hdmi/bin/pi-map hdmi/bin/pi-maps /usr/local/bin/ && sudo chmod +x /usr/local/bin/pi-map*
+# autologin so Ctrl+C x2 drops straight into a shell (no login prompt):
+sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
+sudo cp hdmi/systemd/getty@tty1-autologin.conf /etc/systemd/system/getty@tty1.service.d/autologin.conf
+sudo cp hdmi/systemd/maplibre-slint-gl.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart getty@tty1 maplibre-slint-gl.service
+```
+
+A small console font helps on the downscaled panel (720x576 -> 480x320):
+`FONTFACE="TerminusBold"` / `FONTSIZE="32x16"` in `/etc/default/console-setup`.
+
 ## Raspberry Pi runtime notes
 
 - **DRM master**: install/enable `seatd`, add the user to the `video` group, and

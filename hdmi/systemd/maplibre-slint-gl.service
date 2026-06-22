@@ -1,6 +1,8 @@
 [Unit]
 Description=maplibre-native-slint zero-copy GL map (HDMI / V3D GPU) for Raspberry Pi
-After=multi-user.target network-online.target seatd.service
+# supervisor.py runs the map and switches to the native tty1 console on Ctrl+C x2;
+# `pi-maps` switches back. getty@tty1 must be up to provide that console.
+After=multi-user.target network-online.target seatd.service getty@tty1.service
 Wants=network-online.target
 Requires=seatd.service
 
@@ -22,7 +24,9 @@ Environment=MAPLIBRE_STYLE_URL=https://yuiseki.dev/static/styles/osm-bright.json
 #   MAPLIBRE_WIDTH / MAPLIBRE_HEIGHT  render size (default: the display resolution)
 #   MAPLIBRE_FLY_MS                   flyTo duration for the city buttons (default 2500)
 WorkingDirectory=/home/yuiseki
-ExecStart=/home/yuiseki/maplibre-slint-gl
+# Run the supervisor; it spawns maplibre-slint-gl (inheriting the env above) and
+# toggles MAP <-> the native console. Deploy supervisor.py to this path.
+ExecStart=/usr/bin/python3 /home/yuiseki/pi-display-supervisor.py
 Restart=always
 RestartSec=3
 StandardOutput=journal
