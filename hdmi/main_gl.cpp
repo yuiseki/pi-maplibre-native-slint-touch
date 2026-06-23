@@ -560,6 +560,9 @@ int main(int /*argc*/, char** /*argv*/) {
         int ci = 0;
         int prev = -1;
         size_t show = 0;
+        int otick = 0;                  // sensor-read throttle counter
+        float la_pitch = 1e9f;          // last applied pitch/bearing (change gate)
+        float la_bearing = 1e9f;
     };
     auto ss = std::make_shared<SaverState>();
 
@@ -589,10 +592,11 @@ int main(int /*argc*/, char** /*argv*/) {
             win->set_saver_state(stage);
 
             // Sensor "Sync" feed: /dev/shm/pi-orientation holds "pitch bearing
-            // have_sensor" (written by pi-orient on tmpfs). Report availability
-            // to the UI (greys the checkbox when absent/stale), and when Sync
-            // is on and the live map is showing, drive the camera from it.
-            {
+            // have_sensor ...". Throttled to ~4 Hz (every 4th 60ms tick) and
+            // change-gated so a still device forces no file reads beyond the
+            // poll and no re-renders at all -- keeps the sensor process from
+            // stealing the UI thread's render budget.
+            if (++ss->otick % 4 == 0) {
                 double op = 0.0, ob = 0.0;
                 int have = 0;
                 bool fresh = false;
@@ -612,8 +616,14 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->set_sensor_available(avail);
                 if (sync_on->load() && stage == 0 && avail) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);
-                    smap->set_orientation(p, ob);
-                    win->window().request_redraw();
+                    double db = std::fabs(
+                        std::fmod(ob - ss->la_bearing + 540.0, 360.0) - 180.0);
+                    if (std::fabs(p - ss->la_pitch) > 0.3 || db > 0.3) {
+                        smap->set_orientation(p, ob);
+                        win->window().request_redraw();
+                        ss->la_pitch = static_cast<float>(p);
+                        ss->la_bearing = static_cast<float>(ob);
+                    }
                 }
             }
 
