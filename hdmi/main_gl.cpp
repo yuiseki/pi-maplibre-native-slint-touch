@@ -438,6 +438,10 @@ int main(int /*argc*/, char** /*argv*/) {
         std::getenv("MAPLIBRE_ORIENTATION_FILE")
             ? std::getenv("MAPLIBRE_ORIENTATION_FILE")
             : std::string("/dev/shm/pi-orientation");
+    const std::string gps_path =
+        std::getenv("MAPLIBRE_GPS_FILE")
+            ? std::getenv("MAPLIBRE_GPS_FILE")
+            : std::string("/dev/shm/pi-gps");
     win->on_sync_toggled([=](bool on) {
         sync_on->store(on);
         if (!on) {
@@ -563,6 +567,7 @@ int main(int /*argc*/, char** /*argv*/) {
         int otick = 0;                  // sensor-read throttle counter
         float la_pitch = 1e9f;          // last applied pitch/bearing (change gate)
         float la_bearing = 1e9f;
+        double la_lat = 1e9, la_lon = 1e9;   // last applied GPS centre (change gate)
     };
     auto ss = std::make_shared<SaverState>();
 
@@ -591,38 +596,69 @@ int main(int /*argc*/, char** /*argv*/) {
             }
             win->set_saver_state(stage);
 
-            // Sensor "Sync" feed: /dev/shm/pi-orientation holds "pitch bearing
-            // have_sensor ...". Throttled to ~4 Hz (every 4th 60ms tick) and
-            // change-gated so a still device forces no file reads beyond the
-            // poll and no re-renders at all -- keeps the sensor process from
-            // stealing the UI thread's render budget.
+            // Sensor "Sync" feed: follow ALL sensors. /dev/shm/pi-orientation
+            // gives pitch+bearing, /dev/shm/pi-gps gives lat lon fix sats.
+            // Throttled to ~4 Hz and change-gated so a still device/position
+            // forces no re-renders (keeps the sensor processes from stealing the
+            // UI thread's render budget). Zoom is never touched.
             if (++ss->otick % 4 == 0) {
+                const int64_t rt =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+                auto fresh_ms = [rt](const std::string& path) -> bool {
+                    struct stat st {};
+                    if (::stat(path.c_str(), &st) != 0)
+                        return false;
+                    int64_t m = (int64_t)st.st_mtim.tv_sec * 1000 +
+                                st.st_mtim.tv_nsec / 1000000;
+                    return (rt - m) < 2000;
+                };
+
                 double op = 0.0, ob = 0.0;
-                int have = 0;
-                bool fresh = false;
-                struct stat st {};
-                if (::stat(orient_path.c_str(), &st) == 0) {
-                    int64_t mtime_ms = (int64_t)st.st_mtim.tv_sec * 1000 +
-                                       st.st_mtim.tv_nsec / 1000000;
-                    int64_t rt =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
-                    fresh = (rt - mtime_ms) < 2000;
+                int ohave = 0;
+                const bool ofresh = fresh_ms(orient_path);
+                if (ofresh) {
                     std::ifstream f(orient_path);
-                    f >> op >> ob >> have;
+                    f >> op >> ob >> ohave;
                 }
-                const bool avail = fresh && have == 1;
-                win->set_sensor_available(avail);
-                if (sync_on->load() && stage == 0 && avail) {
+                const bool orient_ok = ofresh && ohave == 1;
+
+                double glat = 0.0, glon = 0.0;
+                int gfix = 0, gsats = 0;
+                const bool gfresh = fresh_ms(gps_path);
+                if (gfresh) {
+                    std::ifstream f(gps_path);
+                    f >> glat >> glon >> gfix >> gsats;
+                }
+                const bool gps_ok = gfresh && gfix >= 1;
+
+                win->set_sensor_available(orient_ok || gps_ok);
+
+                if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);
-                    double db = std::fabs(
-                        std::fmod(ob - ss->la_bearing + 540.0, 360.0) - 180.0);
-                    if (std::fabs(p - ss->la_pitch) > 0.3 || db > 0.3) {
-                        smap->set_orientation(p, ob);
+                    bool changed = false;
+                    if (orient_ok) {
+                        double db = std::fabs(
+                            std::fmod(ob - ss->la_bearing + 540.0, 360.0) - 180.0);
+                        if (std::fabs(p - ss->la_pitch) > 0.3 || db > 0.3)
+                            changed = true;
+                    }
+                    if (gps_ok &&
+                        (std::fabs(glat - ss->la_lat) > 3e-5 ||
+                         std::fabs(glon - ss->la_lon) > 3e-5))
+                        changed = true;
+                    if (changed) {
+                        smap->set_sync(gps_ok, glat, glon, orient_ok, p, ob);
                         win->window().request_redraw();
-                        ss->la_pitch = static_cast<float>(p);
-                        ss->la_bearing = static_cast<float>(ob);
+                        if (orient_ok) {
+                            ss->la_pitch = static_cast<float>(p);
+                            ss->la_bearing = static_cast<float>(ob);
+                        }
+                        if (gps_ok) {
+                            ss->la_lat = glat;
+                            ss->la_lon = glon;
+                        }
                     }
                 }
             }

@@ -85,6 +85,11 @@ public:
     // Apply pitch + bearing together (one camera update); used by the sensor
     // "Sync" feed so a single jumpTo carries both.
     void set_orientation(double pitch, double bearing);
+    // "Sync" feed: in one camera update, optionally recentre on a GPS fix
+    // (use_center) and/or apply sensor pitch+bearing (use_orient). Zoom is left
+    // untouched so the user keeps their zoom level.
+    void set_sync(bool use_center, double lat, double lon, bool use_orient,
+                  double pitch, double bearing);
     // Toggle the "Dance" animation: when on, sweep pitch+bearing at the current
     // location; when off, reset pitch/bearing to 0 (keeping center + zoom).
     void set_dance(bool on);
