@@ -65,6 +65,11 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
     if (const char* e = std::getenv("MAPLIBRE_ORIENTATION_DEMO")) {
         demo_orientation_ = (std::atoi(e) != 0);
     }
+    if (const char* e = std::getenv("MAPLIBRE_DANCE_SPEED")) {
+        double v = std::atof(e);
+        if (v > 0.0)
+            dance_speed_ = v;
+    }
     if (const char* e = std::getenv("MAPLIBRE_PERF")) {
         perf_log_ = (std::atoi(e) != 0);
     }
@@ -110,8 +115,16 @@ void SlintMapGL::render() {
         // Cap pitch at 45 (not 60): beyond ~45 the frustum reaches far toward
         // the horizon and the visible tile count explodes, which is what spikes
         // V3D render time. 45 keeps the dance lively but much smoother.
-        const double pitch = 22.5 * (1.0 - std::cos(t * 0.8));  // 0..45, eases up
-        const double bearing = std::fmod(t * 30.0, 360.0);      // 12s / turn
+        //
+        // dance_speed_ (MAPLIBRE_DANCE_SPEED, default 0.5) slows the sweep: a
+        // gentler view change per frame loads fewer new tiles per frame and
+        // makes the inevitable dropped frames far less noticeable. At V3D's
+        // ~11ms/frame baseline the full map render grazes the 16.6ms vsync
+        // budget, so a fast sweep tips frames over and stutters; a slow one
+        // does not.
+        const double pitch =
+            22.5 * (1.0 - std::cos(t * 0.8 * dance_speed_));  // 0..45, eases up
+        const double bearing = std::fmod(t * 30.0 * dance_speed_, 360.0);
         map->jumpTo(mbgl::CameraOptions().withPitch(pitch).withBearing(bearing));
         map->triggerRepaint();
         repaint = true;

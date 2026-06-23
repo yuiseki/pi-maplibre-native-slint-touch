@@ -94,7 +94,8 @@ hdmi/scripts/run.sh             # tmux session 'mapgl'; logs to ~/map-gl.log
 | `MAPLIBRE_WIDTH` / `MAPLIBRE_HEIGHT` | Render size (default: the display resolution) |
 | `MAPLIBRE_FLY_MS` | `flyTo` duration in ms for the city buttons (default 2500) |
 | `MAPLIBRE_PREFETCH_DELTA` | `Map::setPrefetchZoomDelta`: request `zoom - delta` parent tiles first so a coarse map shows during loads instead of blank pop-in (maplibre default 4; 0 disables). Affects what shows during a load, not the frame rate. |
-| `MAPLIBRE_ORIENTATION_DEMO` | When `1`, sweep pitch (0..60) and bearing continuously every frame and log `[perf] N fps`. A stand-in for a future tilt/compass sensor feed; use it to gauge how the panel follows continuous camera changes. |
+| `MAPLIBRE_ORIENTATION_DEMO` | When `1`, sweep pitch (0..45) and bearing continuously every frame and log `[perf] N fps`. A stand-in for a future tilt/compass sensor feed; use it to gauge how the panel follows continuous camera changes. |
+| `MAPLIBRE_DANCE_SPEED` | Dance/orientation sweep rate factor (default `0.5`). The full map re-renders every frame (~11ms on V3D, near the 16.6ms vsync budget), so a slower sweep keeps frames under budget and makes any drops far less noticeable. Lower = smoother/slower. |
 | `MAPLIBRE_SAVER_SECS` | Idle seconds before the DVD-logo stage (default 300) |
 | `MAPLIBRE_DVD_SECS` | Extra idle seconds before the map-tile stage (default 1800) |
 | `MAPLIBRE_OFF_AC_SECS` / `MAPLIBRE_OFF_BATT_SECS` | Idle seconds before the screen goes black, on AC vs battery (default 43200 / 1800; PiSugar-aware) |

@@ -120,6 +120,7 @@ private:
     // bearing every frame (a stand-in for a future tilt/compass sensor feed) and
     // log the effective frame rate. Off by default.
     bool demo_orientation_ = false;
+    double dance_speed_ = 0.5;  // sweep-rate factor; MAPLIBRE_DANCE_SPEED
     std::chrono::steady_clock::time_point demo_start_{};
     std::chrono::steady_clock::time_point fps_last_{};
     int fps_frames_ = 0;
