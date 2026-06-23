@@ -114,7 +114,10 @@ private:
     double min_zoom_ = 0.0;
     double max_zoom_ = 22.0;
     int frame_count_ = 0;
-    int fly_ms_ = 2500;  // flyTo duration; override with MAPLIBRE_FLY_MS
+    // flyTo duration; override with MAPLIBRE_FLY_MS. Deliberately long: V3D
+    // renders the full map every frame, and a fast flyTo outruns tile loading
+    // so almost nothing draws mid-flight. 6 s lets tiles keep up and stay smooth.
+    int fly_ms_ = 6000;
 
     // Orientation perf demo: when MAPLIBRE_ORIENTATION_DEMO!=0, sweep pitch and
     // bearing every frame (a stand-in for a future tilt/compass sensor feed) and

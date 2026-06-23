@@ -92,7 +92,7 @@ hdmi/scripts/run.sh             # tmux session 'mapgl'; logs to ~/map-gl.log
 |---|---|
 | `MAPLIBRE_STYLE_URL` | Initial style (also added to the dropdown) |
 | `MAPLIBRE_WIDTH` / `MAPLIBRE_HEIGHT` | Render size (default: the display resolution) |
-| `MAPLIBRE_FLY_MS` | `flyTo` duration in ms for the city buttons (default 2500) |
+| `MAPLIBRE_FLY_MS` | `flyTo` duration in ms for the city buttons (default 6000). Long on purpose: a fast flyTo outruns tile loading on V3D so almost nothing renders mid-flight; a slow one keeps tiles in view. |
 | `MAPLIBRE_PREFETCH_DELTA` | `Map::setPrefetchZoomDelta`: request `zoom - delta` parent tiles first so a coarse map shows during loads instead of blank pop-in (maplibre default 4; 0 disables). Affects what shows during a load, not the frame rate. |
 | `MAPLIBRE_ORIENTATION_DEMO` | When `1`, sweep pitch (0..45) and bearing continuously every frame and log `[perf] N fps`. A stand-in for a future tilt/compass sensor feed; use it to gauge how the panel follows continuous camera changes. |
 | `MAPLIBRE_DANCE_SPEED` | Dance/orientation sweep rate factor (default `0.5`). The full map re-renders every frame (~11ms on V3D, near the 16.6ms vsync budget), so a slower sweep keeps frames under budget and makes any drops far less noticeable. Lower = smoother/slower. |
