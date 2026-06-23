@@ -108,15 +108,15 @@ A staged idle screensaver (kept out of upstream): live map -> bouncing
 recoloured **DVD logo** (5 min idle) -> bouncing **map tile** (+30 min) -> off /
 black (PiSugar-aware: 12 h on AC, 30 min on battery). Any input wakes it.
 
-It is NOT drawn the way the SPI build draws it. This zero-copy GL build has
-sharp Slint/FemtoVG/V3D rendering limits (Slint's PNG path and `glReadPixels`
-from the FBO do not work) — see **`docs/hdmi-gl-rendering-notes.md`** for the
-full story. Practical upshot:
+There are a couple of FemtoVG-GL/V3D gotchas (full story in
+**`docs/hdmi-gl-rendering-notes.md`** — PNGs *do* render here; earlier claims to
+the contrary were webcam-glare misreads). Practical upshot:
 
-- The **DVD logo** is decoded from `~/dvd-logo.png` and hand-tinted into an
-  opaque `SharedPixelBuffer` in C++ (Slint's `@image-url` does not render here).
-- The **map tiles** are pre-baked PNGs (you cannot crop the live map on V3D).
-  Generate them on the build host and they deploy with `deploy.sh`:
+- The **DVD logo** art is black-on-transparent, and Slint `colorize` multiplies
+  it back to black, so C++ decodes the PNG and paints its alpha shape in the
+  bounce colour into a `SharedPixelBuffer` (`~/dvd-logo.png`).
+- The **map tiles** are pre-baked PNGs (reading the live map back out of the FBO
+  returns black on V3D). Generate them on the build host; `deploy.sh` ships them:
 
   ```bash
   hdmi/scripts/gen-screensaver-tiles.sh   # mbgl-render under xvfb -> ~/screensaver-tiles/*.png

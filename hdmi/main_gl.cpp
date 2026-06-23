@@ -26,13 +26,12 @@
 #include "slint_map_gl.hpp"
 
 // DVD logo dimensions (display + alpha-mask size).
+// DVD logo dimensions (display + alpha-mask size).
 static const int DVD_W = 140, DVD_H = 84;
 
-// Decode the DVD-logo PNG into a downscaled alpha mask (the logo shape). In
-// this zero-copy GL build Slint's own PNG path (@image-url / load_from_path)
-// does not render and the raw PNG is black-on-transparent (invisible on the
-// black field), so we keep just the shape and tint it ourselves into an opaque
-// SharedPixelBuffer (which renders) at the current bounce colour.
+// Decode the DVD-logo PNG into a downscaled alpha mask (the logo shape). The
+// art is black-on-transparent, and Slint `colorize` multiplies it back to
+// black, so we keep just the shape and paint it ourselves (see dvd_tinted).
 static std::vector<uint8_t> load_dvd_mask(const std::string& path) {
     std::vector<uint8_t> mask((size_t)DVD_W * DVD_H, 0);
     std::ifstream f(path, std::ios::binary);
@@ -57,8 +56,26 @@ static std::vector<uint8_t> load_dvd_mask(const std::string& path) {
     return mask;
 }
 
+// Build an opaque DVD-logo image: logo shape in `color`, the rest black (so it
+// is seamless on the black screensaver field).
+static slint::Image dvd_tinted(const std::vector<uint8_t>& mask,
+                               uint32_t color) {
+    uint8_t r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
+    std::vector<uint8_t> rgba((size_t)DVD_W * DVD_H * 4);
+    for (size_t i = 0; i < (size_t)DVD_W * DVD_H; ++i) {
+        bool on = i < mask.size() && mask[i] > 100;
+        rgba[i * 4 + 0] = on ? r : 0;
+        rgba[i * 4 + 1] = on ? g : 0;
+        rgba[i * 4 + 2] = on ? b : 0;
+        rgba[i * 4 + 3] = 255;
+    }
+    slint::SharedPixelBuffer<slint::Rgba8Pixel> spb(
+        DVD_W, DVD_H, reinterpret_cast<const slint::Rgba8Pixel*>(rgba.data()));
+    return slint::Image(spb);
+}
+
 // Load a pre-rendered map-tile PNG (from mbgl-render) into an opaque RGBA
-// SharedPixelBuffer, which renders in this build (unlike @image-url).
+// SharedPixelBuffer.
 static slint::Image load_png_image(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f)
@@ -86,24 +103,6 @@ static slint::Image load_png_image(const std::string& path) {
     } catch (...) {
         return slint::Image();
     }
-}
-
-// Build an opaque DVD-logo image: logo shape in `color`, the rest black (so it
-// is seamless on the black screensaver field).
-static slint::Image dvd_tinted(const std::vector<uint8_t>& mask,
-                               uint32_t color) {
-    uint8_t r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
-    std::vector<uint8_t> rgba((size_t)DVD_W * DVD_H * 4);
-    for (size_t i = 0; i < (size_t)DVD_W * DVD_H; ++i) {
-        bool on = i < mask.size() && mask[i] > 100;
-        rgba[i * 4 + 0] = on ? r : 0;
-        rgba[i * 4 + 1] = on ? g : 0;
-        rgba[i * 4 + 2] = on ? b : 0;
-        rgba[i * 4 + 3] = 255;
-    }
-    slint::SharedPixelBuffer<slint::Rgba8Pixel> spb(
-        DVD_W, DVD_H, reinterpret_cast<const slint::Rgba8Pixel*>(rgba.data()));
-    return slint::Image(spb);
 }
 
 // Monotonic milliseconds, shared by the idle watcher and the screensaver timer.
@@ -163,13 +162,12 @@ int main(int /*argc*/, char** /*argv*/) {
     // Idle clock, updated by the input watcher and the wake() callback.
     auto last_activity = std::make_shared<std::atomic<int64_t>>(now_ms());
 
-    // Self-test: fill an 80x80 solid-red CPU image so the harness can read it
-    // back and decide whether femtovg renders CPU images in this GL build.
+    // Pixel-readback self-test (MAPLIBRE_SELFTEST): assert per-stage rendering.
     const bool selftest = std::getenv("MAPLIBRE_SELFTEST") != nullptr;
 
-    // DVD logo: decode the PNG shape once into an alpha mask; we tint it to the
-    // bounce colour each wall hit (Slint's PNG path does not render here, but a
-    // hand-tinted opaque SharedPixelBuffer does).
+    // DVD logo: decode the PNG shape once; tint it to the bounce colour each
+    // wall hit. (@image-url renders fine here, but Slint colorize multiplies
+    // the black logo art to black, so we paint the alpha shape ourselves.)
     auto dvd_mask = std::make_shared<std::vector<uint8_t>>();
     {
         std::string home =
@@ -208,6 +206,7 @@ int main(int /*argc*/, char** /*argv*/) {
         std::cout << "[main_gl] loaded " << tiles->size()
                   << " screensaver tiles from " << dir << std::endl;
     }
+
 
     std::string styleUrl = "https://demotiles.maplibre.org/style.json";
     if (const char* env = std::getenv("MAPLIBRE_STYLE_URL")) {

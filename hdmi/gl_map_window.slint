@@ -58,8 +58,8 @@ export component MapWindow inherits Window {
     in property <length> logo-y: 40px;
     in property <brush> logo-color: #5050ff;
     in property <image> tile-image;
-    // DVD logo, built in C++ as a hand-tinted SharedPixelBuffer (NOT @image-url,
-    // which does not render in this zero-copy GL build).
+    // DVD logo: hand-tinted in C++ (the art is black-on-transparent, and Slint
+    // `colorize` multiplies it to black, so we paint the alpha shape ourselves).
     in property <image> dvd-image;
     callback wake();
 
@@ -195,7 +195,7 @@ export component MapWindow inherits Window {
             }
         }
     }
-    // Stage 1: DVD logo (PNG loaded in C++ via load_from_path).
+    // Stage 1: recoloured DVD logo (hand-tinted SharedPixelBuffer from C++).
     Image {
         opacity: root.saver-state == 1 ? 1.0 : 0.0;
         x: root.logo-x;
