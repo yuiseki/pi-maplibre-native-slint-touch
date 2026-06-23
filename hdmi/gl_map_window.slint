@@ -20,6 +20,15 @@ export component MapWindow inherits Window {
     callback map-size-changed;
     changed map-size => { map-size-changed(); }
 
+    // The ComboBox shows the readable names; selecting one applies the URL at
+    // the same index (the two lists are kept parallel).
+    property <[string]> style-names: [
+        "OSM Bright",
+        "OSM Fiord",
+        "OSM Bright 日本語",
+        "MapTiler Basic 日本語",
+        "MapLibre Demo",
+    ];
     property <[string]> style-urls: [
         "https://yuiseki.dev/static/styles/osm-bright.json",
         "https://yuiseki.dev/static/styles/osm-fiord.json",
@@ -103,25 +112,27 @@ export component MapWindow inherits Window {
             background: transparent;
             visible: root.saver-state == 0;
 
-            // Toolbar (top-left): style dropdown + quick city jumps. Kept clear
-            // of the right-edge zoom strip.
+            // Toolbar (top): style dropdown + quick city jumps. Full width
+            // (the zoom strip sits below it on the right).
             HorizontalBox {
                 x: 22px;
                 y: 10px;
-                width: parent.width - 158px;
+                width: parent.width - 44px;
                 height: 64px;
                 spacing: 8px;
                 ComboBox {
                     horizontal-stretch: 2;
-                    model: root.style-urls;
-                    selected(url) => { map.style-url = url; }
+                    model: root.style-names;
+                    current-index: 0;
+                    selected => { map.style-url = root.style-urls[self.current-index]; }
                 }
                 Button { horizontal-stretch: 1; text: "Paris"; clicked => { map.fly-to(48.8566, 2.3522, 10); } }
-                Button { horizontal-stretch: 1; text: "NY"; clicked => { map.fly-to(40.7128, -74.0060, 10); } }
+                Button { horizontal-stretch: 1; text: "New York"; clicked => { map.fly-to(40.7128, -74.0060, 10); } }
                 Button { horizontal-stretch: 1; text: "Tokyo"; clicked => { map.fly-to(35.6895, 139.6917, 10); } }
             }
 
-            // Wide right-edge vertical zoom strip (easy to hit on resistive touch).
+            // Wide right-edge vertical zoom strip (easy to hit on resistive
+            // touch), below the full-width toolbar.
             VerticalBox {
                 width: 120px;
                 x: parent.width - 128px;
@@ -149,11 +160,14 @@ export component MapWindow inherits Window {
                 }
             }
 
-            // Dance/Calm toggle (bottom-left).
+            // Dance/Calm toggle (bottom-left). Kept well inside the bottom and
+            // left edges (resistive dead zones) with a large hit target, so a
+            // slightly-off tap does not fall through to the map's pan handler.
             Button {
-                x: 8px;
-                y: parent.height - self.height - 8px;
-                min-height: 52px;
+                x: 24px;
+                y: parent.height - self.height - 44px;
+                min-width: 150px;
+                min-height: 64px;
                 text: root.dancing ? "Calm" : "Dance";
                 clicked => {
                     root.dancing = !root.dancing;
