@@ -34,6 +34,10 @@ echo "== overlay app sources from $HERE onto $WORK/cpp =="
 cp "$HERE/main_gl.cpp" "$HERE/gl_map_window.slint" "$WORK/cpp/"
 cp "$HERE/src/"*.hpp "$HERE/src/"*.cpp "$WORK/cpp/src/"
 cp "$HERE/platform/"*.hpp "$HERE/platform/"*.cpp "$WORK/cpp/platform/"
+# Screensaver assets (@image-url paths in gl_map_window.slint resolve relative
+# to the .slint file, i.e. cpp/assets/).
+mkdir -p "$WORK/cpp/assets"
+cp "$HERE/assets/"* "$WORK/cpp/assets/" 2>/dev/null || true
 
 echo "== configure (OpenGL backend + FemtoVG GL + libseat linuxkms) =="
 cmake -S "$WORK" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release \

@@ -83,6 +83,7 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
     std::cout << "[SlintMapGL] prefetchZoomDelta="
               << static_cast<int>(map->getPrefetchZoomDelta()) << std::endl;
 
+    style_url_ = styleUrl;
     map->getStyle().loadURL(styleUrl);
     map->jumpTo(mbgl::CameraOptions()
                     .withCenter(mbgl::LatLng{35.681, 139.767})
@@ -262,9 +263,33 @@ void SlintMapGL::handle_double_click(float x, float y, bool shift) {
 void SlintMapGL::setStyleUrl(const std::string& url) {
     if (map) {
         std::cout << "[SlintMapGL] style change: " << url << std::endl;
+        style_url_ = url;
         map->getStyle().loadURL(url);
         repaint = true;
     }
+}
+
+void SlintMapGL::jump_to(double lat, double lon, double zoom) {
+    if (!map)
+        return;
+    map->jumpTo(mbgl::CameraOptions()
+                    .withCenter(mbgl::LatLng{lat, lon})
+                    .withZoom(zoom));
+    map->triggerRepaint();
+    repaint = true;
+}
+
+void SlintMapGL::get_center_zoom(double& lat, double& lon, double& zoom) const {
+    lat = lon = 0.0;
+    zoom = 10.0;
+    if (!map)
+        return;
+    const auto cam = map->getCameraOptions();
+    if (cam.center) {
+        lat = cam.center->latitude();
+        lon = cam.center->longitude();
+    }
+    zoom = cam.zoom.value_or(10.0);
 }
 
 void SlintMapGL::fly_to(double lat, double lon, double zoom) {

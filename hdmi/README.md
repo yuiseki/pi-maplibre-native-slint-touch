@@ -95,6 +95,37 @@ hdmi/scripts/run.sh             # tmux session 'mapgl'; logs to ~/map-gl.log
 | `MAPLIBRE_FLY_MS` | `flyTo` duration in ms for the city buttons (default 2500) |
 | `MAPLIBRE_PREFETCH_DELTA` | `Map::setPrefetchZoomDelta`: request `zoom - delta` parent tiles first so a coarse map shows during loads instead of blank pop-in (maplibre default 4; 0 disables). Affects what shows during a load, not the frame rate. |
 | `MAPLIBRE_ORIENTATION_DEMO` | When `1`, sweep pitch (0..60) and bearing continuously every frame and log `[perf] N fps`. A stand-in for a future tilt/compass sensor feed; use it to gauge how the panel follows continuous camera changes. |
+| `MAPLIBRE_SAVER_SECS` | Idle seconds before the DVD-logo stage (default 300) |
+| `MAPLIBRE_DVD_SECS` | Extra idle seconds before the map-tile stage (default 1800) |
+| `MAPLIBRE_OFF_AC_SECS` / `MAPLIBRE_OFF_BATT_SECS` | Idle seconds before the screen goes black, on AC vs battery (default 43200 / 1800; PiSugar-aware) |
+| `MAPLIBRE_TILE_DIR` | Directory of pre-rendered map-tile PNGs (default `~/screensaver-tiles`) |
+| `MAPLIBRE_DVD_LOGO` | DVD logo PNG path (default `~/dvd-logo.png`) |
+| `MAPLIBRE_SELFTEST` | When `1`, freeze the bounce and log per-stage pixel-readback assertions (TDD; see docs) |
+
+## Screensaver
+
+A staged idle screensaver (kept out of upstream): live map -> bouncing
+recoloured **DVD logo** (5 min idle) -> bouncing **map tile** (+30 min) -> off /
+black (PiSugar-aware: 12 h on AC, 30 min on battery). Any input wakes it.
+
+It is NOT drawn the way the SPI build draws it. This zero-copy GL build has
+sharp Slint/FemtoVG/V3D rendering limits (Slint's PNG path and `glReadPixels`
+from the FBO do not work) — see **`docs/hdmi-gl-rendering-notes.md`** for the
+full story. Practical upshot:
+
+- The **DVD logo** is decoded from `~/dvd-logo.png` and hand-tinted into an
+  opaque `SharedPixelBuffer` in C++ (Slint's `@image-url` does not render here).
+- The **map tiles** are pre-baked PNGs (you cannot crop the live map on V3D).
+  Generate them on the build host and they deploy with `deploy.sh`:
+
+  ```bash
+  hdmi/scripts/gen-screensaver-tiles.sh   # mbgl-render under xvfb -> ~/screensaver-tiles/*.png
+  hdmi/scripts/deploy.sh <display-host>   # copies binary + dvd-logo.png + tiles
+  ```
+
+  Verify rendering precisely (no webcam guesswork) with
+  `MAPLIBRE_SELFTEST=1 MAPLIBRE_SAVER_SECS=4 MAPLIBRE_DVD_SECS=8 …` and read the
+  `[selftest]` lines.
 
 ## Input: touch, mouse, keyboard + the map/terminal switch
 

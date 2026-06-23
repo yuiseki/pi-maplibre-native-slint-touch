@@ -69,6 +69,16 @@ public:
     // Commands from the toolbar (dropdown / buttons / sliders).
     void setStyleUrl(const std::string& url);
     void fly_to(double lat, double lon, double zoom);
+    // Instant (no animation) recentre; used by the screensaver tile prerender
+    // and to restore the user's view on wake.
+    void jump_to(double lat, double lon, double zoom);
+
+    // Current style URL + center/zoom, so the screensaver can save the user's
+    // view before the bouncing-tile prerender and restore it on wake.
+    std::string current_style_url() const {
+        return style_url_;
+    }
+    void get_center_zoom(double& lat, double& lon, double& zoom) const;
     void set_zoom(double zoom);
     void set_pitch(double pitch);
     void set_bearing(double bearing);
@@ -98,6 +108,7 @@ private:
     std::atomic<bool> map_idle{false};
     std::atomic<bool> repaint{false};
     bool fallback_style_applied{false};
+    std::string style_url_;  // last style URL loaded (tracked for save/restore)
 
     mbgl::Point<double> last_pos{};
     double min_zoom_ = 0.0;
