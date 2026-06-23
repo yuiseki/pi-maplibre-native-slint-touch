@@ -47,6 +47,10 @@ export component MapWindow inherits Window {
     in property <bool> sensor-available: false;
     callback sync-toggled(bool);
 
+    // Battery (PiSugar): percent + charging state for a small corner readout.
+    in property <int> battery-percent: -1;     // -1 = unknown / hidden
+    in property <bool> battery-plugged: false;
+
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
     // would otherwise consume Up/Down as zoom). Unhandled keys from other widgets
@@ -122,7 +126,7 @@ export component MapWindow inherits Window {
             // (the zoom strip sits below it on the right).
             HorizontalBox {
                 x: 22px;
-                y: 10px;
+                y: 36px;
                 width: parent.width - 44px;
                 height: 64px;
                 spacing: 8px;
@@ -137,13 +141,36 @@ export component MapWindow inherits Window {
                 Button { horizontal-stretch: 1; text: "Tokyo"; clicked => { map.fly-to(35.6895, 139.6917, 10); } }
             }
 
+            // Dedicated top status bar (full-width strip above the toolbar).
+            // Battery on the right for now; the left side is reserved for GPS
+            // fix / coords / zoom later.
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 26px;
+                background: #000000c0;
+                Text {                      // battery, right-aligned
+                    x: parent.width - 84px;
+                    y: 0px;
+                    width: 76px;
+                    height: 100%;
+                    visible: root.battery-percent >= 0;
+                    text: (root.battery-plugged ? "AC " : "BAT ") + root.battery-percent + "%";
+                    color: root.battery-percent <= 20 ? #ff8080 : white;
+                    font-size: 14px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+
             // Wide right-edge vertical zoom strip (easy to hit on resistive
             // touch), below the full-width toolbar.
             VerticalBox {
                 width: 120px;
                 x: parent.width - 128px;
-                y: 84px;
-                height: parent.height - 96px;
+                y: 108px;
+                height: parent.height - 120px;
                 padding: 8px;
                 spacing: 10px;
                 Button {

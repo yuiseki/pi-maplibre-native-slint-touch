@@ -527,22 +527,28 @@ int main(int /*argc*/, char** /*argv*/) {
     // (c) Power-state poller (PiSugar via pi-power). AC -> long OFF timeout,
     //     battery -> short. Polled off the UI thread so nc never stalls it.
     auto plugged = std::make_shared<std::atomic<bool>>(true);
+    auto battery_pct = std::make_shared<std::atomic<int>>(-1);  // -1 = unknown
     {
         auto pl = plugged;
+        auto bp = battery_pct;
         std::string home = std::getenv("HOME") ? std::getenv("HOME") : "/home/pi";
         std::string cmd = home + "/.local/bin/pi-power 2>/dev/null";
-        std::thread([pl, cmd]() {
+        std::thread([pl, bp, cmd]() {
             while (true) {
                 bool p = pl->load();
+                int pct = bp->load();
                 if (FILE* fp = popen(cmd.c_str(), "r")) {
                     char line[160];
                     while (std::fgets(line, sizeof(line), fp)) {
                         if (std::strstr(line, "battery_power_plugged"))
                             p = std::strstr(line, "true") != nullptr;
+                        else if (std::strncmp(line, "battery:", 8) == 0)
+                            pct = static_cast<int>(std::lround(std::atof(line + 8)));
                     }
                     pclose(fp);
                 }
                 pl->store(p);
+                bp->store(pct);
                 std::this_thread::sleep_for(std::chrono::seconds(30));
             }
         }).detach();
@@ -595,6 +601,8 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->window().request_redraw();
             }
             win->set_saver_state(stage);
+            win->set_battery_percent(battery_pct->load());
+            win->set_battery_plugged(plugged->load());
 
             // Sensor "Sync" feed: follow ALL sensors. /dev/shm/pi-orientation
             // gives pitch+bearing, /dev/shm/pi-gps gives lat lon fix sats.
