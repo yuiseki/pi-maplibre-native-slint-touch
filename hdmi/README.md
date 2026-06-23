@@ -115,8 +115,8 @@ the contrary were webcam-glare misreads). Practical upshot:
 - The **DVD logo** art is black-on-transparent, and Slint `colorize` multiplies
   it back to black, so C++ decodes the PNG and paints its alpha shape in the
   bounce colour into a `SharedPixelBuffer` (`~/dvd-logo.png`).
-- The **map tiles** are pre-baked PNGs (reading the live map back out of the FBO
-  returns black on V3D). Generate them on the build host; `deploy.sh` ships them:
+- The **map tiles** are pre-baked PNGs (baked offline with `mbgl-render` for
+  varied regions/styles). Generate them on the build host; `deploy.sh` ships them:
 
   ```bash
   hdmi/scripts/gen-screensaver-tiles.sh   # mbgl-render under xvfb -> ~/screensaver-tiles/*.png

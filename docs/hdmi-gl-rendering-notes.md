@@ -20,7 +20,8 @@ conclusions during development — e.g. "PNGs don't render", which is false).
 | `Image` from **`@image-url("…")`** (embedded PNG) | ✅ |
 | `Image` from **`Image::load_from_path("…")`** | ✅ |
 | `glReadPixels` from **framebuffer 0** (the scanned-out surface) | ✅ |
-| `glReadPixels` from the **custom texture-backed FBO** | ⚠️ returned all-black in testing (see below) |
+| `glReadPixels` from the **custom texture-backed FBO**, right after rendering | ✅ |
+| `glReadPixels` from that FBO at the **start of a frame** (before re-rendering) | ❌ all-black: V3D discards the colour attachment between frames |
 | `glBlitFramebuffer` **scaling** on V3D | ❌ (1:1 copies are fine) |
 
 So **Slint's PNG paths render fine here** — there is no Slint image bug. Two
@@ -37,15 +38,19 @@ shape in the bounce colour into an opaque `SharedPixelBuffer` (`dvd_tinted()` in
 `main_gl.cpp`). Recolouring = rebuild the buffer; runtime `set_*_image` updates
 render fine.
 
-### 2. Reading the map back out of the FBO
+### 2. The FBO colour attachment is discarded between frames (V3D)
 
-`glReadPixels` from framebuffer 0 works (the self-test uses it). But reading a
-crop from the **custom FBO** (the one maplibre renders into, with a texture
-colour attachment) came back **all-black** on V3D in testing — even though that
-same texture displays correctly via the borrowed-texture `MMapView`. Root cause
-was not fully isolated (V3D readback quirk vs. read timing). Practical upshot:
-**don't try to crop the live map into a CPU tile on-device.** Pre-render the
-bouncing-tile images with **`mbgl-render`** instead (next section).
+V3D is a tiled GPU and treats the custom FBO's colour attachment as transient:
+it is **not preserved across frames**. Reading it (or compositing the borrowed
+texture) at the *start* of a frame, before re-rendering, gives all-black; you
+must `frontend->render()` every frame. Confirmed by readback: the FBO centre is
+`0,0,0,0` at frame start, then the real map colour right after `render()`.
+
+(`glReadPixels` from this FBO itself works fine when you read **right after**
+rendering — an earlier "readback returns black" note here was a misdiagnosis of
+the cross-frame discard above.) The screensaver still uses **pre-rendered
+`mbgl-render` tiles** rather than cropping the live map, but that is a design
+choice (varied regions/styles, baked offline), not a readback limitation.
 
 ## Pre-rendering map tiles with `mbgl-render`
 
