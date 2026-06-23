@@ -1,7 +1,7 @@
 // Raspberry Pi / small-touch-panel layout for the zero-copy GL example.
 // Larger touch targets (bigger fonts + a tall toolbar) and a wide right-edge
 // vertical zoom strip so taps land reliably on a low-res resistive panel.
-import { Button, ComboBox, HorizontalBox, VerticalBox, Slider } from "std-widgets.slint";
+import { Button, ComboBox, HorizontalBox, VerticalBox, Slider, CheckBox } from "std-widgets.slint";
 import { MMapView, MMapAdapter } from "../src/maplibre.slint";
 
 export { MMapAdapter }
@@ -40,6 +40,12 @@ export component MapWindow inherits Window {
     // "Dance" toggle: drives the pitch/bearing animation in the C++ backend.
     in-out property <bool> dancing: false;
     callback set-dance(bool);
+
+    // "Sync" toggle: drive map pitch/bearing from the orientation sensors.
+    // sensor-available is set by C++ from the live sensor feed; the checkbox
+    // is disabled (greyed) when no fresh sensor data is present.
+    in property <bool> sensor-available: false;
+    callback sync-toggled(bool);
 
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
@@ -173,6 +179,18 @@ export component MapWindow inherits Window {
                     root.dancing = !root.dancing;
                     root.set-dance(root.dancing);
                 }
+            }
+
+            // "Sync" toggle (bottom, right of Dance): live sensor-driven
+            // pitch/bearing. Shown only while C++ reports fresh sensor data, so
+            // it is absent entirely on a Pi with no orientation sensors.
+            CheckBox {
+                x: 190px;
+                y: parent.height - self.height - 50px;
+                min-height: 56px;
+                text: "Sync";
+                visible: root.sensor-available;
+                toggled => { root.sync-toggled(self.checked); }
             }
         }
     } // keys (FocusScope)

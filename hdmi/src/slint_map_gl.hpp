@@ -82,6 +82,9 @@ public:
     void set_zoom(double zoom);
     void set_pitch(double pitch);
     void set_bearing(double bearing);
+    // Apply pitch + bearing together (one camera update); used by the sensor
+    // "Sync" feed so a single jumpTo carries both.
+    void set_orientation(double pitch, double bearing);
     // Toggle the "Dance" animation: when on, sweep pitch+bearing at the current
     // location; when off, reset pitch/bearing to 0 (keeping center + zoom).
     void set_dance(bool on);

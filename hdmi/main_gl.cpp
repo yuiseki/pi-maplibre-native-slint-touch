@@ -14,6 +14,7 @@
 #include <poll.h>
 #include <slint.h>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -429,6 +430,22 @@ int main(int /*argc*/, char** /*argv*/) {
     // "Dance" button: start/stop the pitch+bearing animation at the current view.
     win->on_set_dance([=](bool on) { smap->set_dance(on); });
 
+    // "Sync" checkbox: when on, the stage timer feeds pitch+bearing from
+    // /dev/shm/pi-orientation (written by pi-orient; tmpfs = no microSD wear).
+    // Toggling off restores a flat, north-up camera.
+    auto sync_on = std::make_shared<std::atomic<bool>>(false);
+    const std::string orient_path =
+        std::getenv("MAPLIBRE_ORIENTATION_FILE")
+            ? std::getenv("MAPLIBRE_ORIENTATION_FILE")
+            : std::string("/dev/shm/pi-orientation");
+    win->on_sync_toggled([=](bool on) {
+        sync_on->store(on);
+        if (!on) {
+            smap->set_orientation(0.0, 0.0);
+            win->window().request_redraw();
+        }
+    });
+
     // Keyboard arrow-key pan (Shift+Up/Down zoom is handled in the .slint).
     win->on_pan([=](float dx, float dy) { smap->handle_pan(dx, dy); });
 
@@ -570,6 +587,35 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->window().request_redraw();
             }
             win->set_saver_state(stage);
+
+            // Sensor "Sync" feed: /dev/shm/pi-orientation holds "pitch bearing
+            // have_sensor" (written by pi-orient on tmpfs). Report availability
+            // to the UI (greys the checkbox when absent/stale), and when Sync
+            // is on and the live map is showing, drive the camera from it.
+            {
+                double op = 0.0, ob = 0.0;
+                int have = 0;
+                bool fresh = false;
+                struct stat st {};
+                if (::stat(orient_path.c_str(), &st) == 0) {
+                    int64_t mtime_ms = (int64_t)st.st_mtim.tv_sec * 1000 +
+                                       st.st_mtim.tv_nsec / 1000000;
+                    int64_t rt =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+                    fresh = (rt - mtime_ms) < 2000;
+                    std::ifstream f(orient_path);
+                    f >> op >> ob >> have;
+                }
+                const bool avail = fresh && have == 1;
+                win->set_sensor_available(avail);
+                if (sync_on->load() && stage == 0 && avail) {
+                    double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);
+                    smap->set_orientation(p, ob);
+                    win->window().request_redraw();
+                }
+            }
 
             if (stage != 1 && stage != 2)
                 return;

@@ -341,6 +341,14 @@ void SlintMapGL::set_bearing(double bearing) {
     repaint = true;
 }
 
+void SlintMapGL::set_orientation(double pitch, double bearing) {
+    if (!map)
+        return;
+    map->jumpTo(mbgl::CameraOptions().withPitch(pitch).withBearing(bearing));
+    map->triggerRepaint();
+    repaint = true;
+}
+
 void SlintMapGL::set_dance(bool on) {
     demo_orientation_ = on;
     std::cout << "[SlintMapGL] dance=" << (on ? "on" : "off") << std::endl;
