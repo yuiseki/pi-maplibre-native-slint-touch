@@ -9,9 +9,13 @@ opengl = ["maplibre_native/opengl"]
 vulkan = ["maplibre_native/vulkan"]
 # Slint linuxkms backend (libseat-free) for console / embedded KMS (no X11/Wayland).
 linuxkms-noseat = ["slint/backend-linuxkms-noseat"]
+# linuxkms with libseat/logind (used on boxes that do have a seat manager).
+linuxkms = ["slint/backend-linuxkms"]
 
 [dependencies]
 slint = "1.16"
+# Direct /dev/fb0 access helpers for the SPI framebuffer path.
+framebuffer = "0.3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 maplibre_native = { version = "0.8.2", features = ["opengl"] }
@@ -21,3 +25,11 @@ maplibre_native = { version = "0.8.2", features = ["metal"] }
 
 [build-dependencies]
 slint-build = "1.16"
+
+# This headless SPI box has no X11, so maplibre-native must build its OpenGL
+# backend with EGL instead of GLX/X11. Stock maplibre_native 0.8.2 uses GLX, so
+# apply patches/maplibre-native-rs-0.8.2-egl.patch to a local copy of the crate
+# and point at it here. Keep the path LOCAL (do not commit a machine path);
+# uncomment and edit per machine. See README "Patched maplibre-native-rs".
+# [patch.crates-io]
+# maplibre_native = { path = "/path/to/maplibre_native_patched" }

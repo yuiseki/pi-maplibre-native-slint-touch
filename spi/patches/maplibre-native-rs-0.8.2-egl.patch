@@ -1,0 +1,40 @@
+Subject: [PATCH] build.rs: build the OpenGL backend with EGL instead of GLX/X11
+
+maplibre-native-rs 0.8.2 builds maplibre-native's OpenGL backend on Linux with
+GLX, which transitively requires X11 (it links X11 and uses XInitThreads). That
+cannot run on a headless / console-only box with no X server, which is exactly
+this SPI panel's setup (surfaceless EGL + software GL to /dev/fb0).
+
+This switches the Linux OpenGL build to EGL: configure maplibre-native with
+-DMLN_WITH_EGL=ON -DMLN_WITH_X11=OFF and link EGL instead of X11. It matches the
+runtime env used here (EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1
+GALLIUM_DRIVER=llvmpipe).
+
+Apply to a local copy of the maplibre_native 0.8.2 crate source, then point the
+app at it via [patch.crates-io] (see ../README.md). Candidate for upstreaming as
+a selectable EGL backend in maplibre-native-rs.
+
+--- a/build.rs
++++ b/build.rs
+@@ -381,8 +381,9 @@
+         GraphicsRenderingAPI::OpenGL => {
+             config.configure_arg("-DMLN_WITH_OPENGL=ON");
+             #[cfg(target_os = "linux")]
+-            // GLX headless backend transitively requires X11.
+-            config.configure_arg("-DMLN_WITH_X11=ON");
++            config.configure_arg("-DMLN_WITH_EGL=ON");
++            #[cfg(target_os = "linux")]
++            config.configure_arg("-DMLN_WITH_X11=OFF");
+         }
+         GraphicsRenderingAPI::Vulkan => {
+             config.configure_arg("-DMLN_WITH_VULKAN=ON");
+@@ -564,8 +565,7 @@
+         GraphicsRenderingAPI::OpenGL => {
+             println!("cargo:rustc-link-lib=GL");
+             if cfg!(target_os = "linux") {
+-                // GLX backend uses X11 symbols such as XInitThreads.
+-                println!("cargo:rustc-link-lib=X11");
++                println!("cargo:rustc-link-lib=EGL");
+             }
+         }
+         GraphicsRenderingAPI::Metal => {

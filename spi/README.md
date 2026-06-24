@@ -181,6 +181,37 @@ help if you (a) attach an HDMI display to the vc4 connector, or (b) replace fbtf
 with a DRM/KMS panel driver (tinydrm / `panel-mipi-dbi`); even in case (b) the SPI
 transfer stays CPU-bound, so the win is marginal.
 
+## Patched maplibre-native-rs (EGL, not GLX/X11)
+
+This box is **headless / console-only with no X11**, and renders with surfaceless
+EGL + software GL (see "Display stack" below). But stock `maplibre_native` 0.8.2
+builds maplibre-native's OpenGL backend with **GLX, which requires X11** (it
+links `X11` and calls `XInitThreads`), so it cannot build/run here. That backend
+must be built with **EGL** instead.
+
+`patches/maplibre-native-rs-0.8.2-egl.patch` makes exactly that change to the
+crate's `build.rs` (`-DMLN_WITH_EGL=ON -DMLN_WITH_X11=OFF`, and link `EGL` not
+`X11`). Set it up once on the build host:
+
+```bash
+# get the crate source (e.g. from the local registry copy, or `cargo vendor`)
+cp -r ~/.cargo/registry/src/*/maplibre_native-0.8.2 ~/maplibre_native_patched
+cd ~/maplibre_native_patched
+patch -p1 < /path/to/this-repo/spi/patches/maplibre-native-rs-0.8.2-egl.patch
+```
+
+Then point the app at it via `[patch.crates-io]` in `Cargo.toml` (a commented
+template is there). Keep the path **local**; do not commit a machine path:
+
+```toml
+[patch.crates-io]
+maplibre_native = { path = "/home/<you>/maplibre_native_patched" }
+```
+
+This EGL change is a good candidate to upstream into
+[maplibre-native-rs](https://github.com/maplibre/maplibre-native-rs) as a
+selectable backend, after which the patch can be dropped.
+
 ## Build
 
 ```bash
