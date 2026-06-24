@@ -25,6 +25,15 @@ scp "$BIN" "$H":~/maplibre-slint-gl
 #   ~/screensaver-tiles/   pre-rendered map-tile PNGs (scripts/gen-screensaver-tiles.sh)
 scp "$HERE/assets/dvd-logo.png" "$H":~/dvd-logo.png 2>/dev/null || \
   echo "WARN: hdmi/assets/dvd-logo.png missing (DVD stage will be blank)"
+
+# GPS satellite status-bar icons (decoded to SharedPixelBuffers in C++):
+#   ~/sat-grey.png  no GPS device   ~/sat-yellow.png  no fix   ~/sat-green.png  fix
+# (@image-url images do NOT render in this femtovg-GL build, so these are
+#  loaded by path in C++ and pushed via `in property <image>`.)
+for s in grey yellow green; do
+  scp "$HERE/assets/sat-$s.png" "$H":~/sat-$s.png 2>/dev/null || \
+    echo "WARN: hdmi/assets/sat-$s.png missing (GPS icon stage $s will be blank)"
+done
 if ls "$HOME/screensaver-tiles/"*.png >/dev/null 2>&1; then
   ssh "$H" 'mkdir -p ~/screensaver-tiles'
   scp "$HOME/screensaver-tiles/"*.png "$H":~/screensaver-tiles/

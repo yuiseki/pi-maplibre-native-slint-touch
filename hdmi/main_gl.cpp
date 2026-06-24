@@ -1,5 +1,6 @@
 #include <GLES3/gl3.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -106,6 +107,39 @@ static slint::Image load_png_image(const std::string& path) {
     }
 }
 
+// Load a PNG into an RGBA SharedPixelBuffer PRESERVING alpha (for icons with a
+// transparent background, e.g. the status-bar satellite). @image-url images do
+// not render in this femtovg-GL build, so icons are passed in as <image>
+// properties the same way the DVD logo / tiles are.
+static slint::Image load_png_rgba(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return slint::Image();
+    std::string data((std::istreambuf_iterator<char>(f)),
+                     std::istreambuf_iterator<char>());
+    if (data.empty())
+        return slint::Image();
+    try {
+        mbgl::PremultipliedImage img = mbgl::decodeImage(data);
+        const uint32_t w = img.size.width, h = img.size.height;
+        const uint8_t* src = img.data.get();
+        std::vector<uint8_t> rgba((size_t)w * h * 4);
+        for (size_t i = 0; i < (size_t)w * h; ++i) {
+            uint8_t a = src[i * 4 + 3];
+            for (int c = 0; c < 3; ++c)
+                rgba[i * 4 + c] =
+                    a ? static_cast<uint8_t>(std::min(255, src[i * 4 + c] * 255 / a))
+                      : 0;
+            rgba[i * 4 + 3] = a;  // preserve transparency
+        }
+        slint::SharedPixelBuffer<slint::Rgba8Pixel> spb(
+            w, h, reinterpret_cast<const slint::Rgba8Pixel*>(rgba.data()));
+        return slint::Image(spb);
+    } catch (...) {
+        return slint::Image();
+    }
+}
+
 // Monotonic milliseconds, shared by the idle watcher and the screensaver timer.
 static int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -178,6 +212,18 @@ int main(int /*argc*/, char** /*argv*/) {
                             : (home + "/dvd-logo.png");
         *dvd_mask = load_dvd_mask(p);
         win->set_dvd_image(dvd_tinted(*dvd_mask, 0x50c8ff));
+    }
+
+    // Status-bar GPS satellite icons (grey/yellow/green), indexed by gps state
+    // 0/1/2. Passed in as <image> (the @image-url path does not render here).
+    auto sat_icons = std::make_shared<std::array<slint::Image, 3>>();
+    {
+        std::string home =
+            std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
+        (*sat_icons)[0] = load_png_rgba(home + "/sat-grey.png");
+        (*sat_icons)[1] = load_png_rgba(home + "/sat-yellow.png");
+        (*sat_icons)[2] = load_png_rgba(home + "/sat-green.png");
+        win->set_gps_icon((*sat_icons)[0]);
     }
 
     // Pre-rendered map tiles (PNGs from mbgl-render) for the bouncing-tile
@@ -633,15 +679,21 @@ int main(int /*argc*/, char** /*argv*/) {
                 const bool orient_ok = ofresh && ohave == 1;
 
                 double glat = 0.0, glon = 0.0;
-                int gfix = 0, gsats = 0;
+                int gfix = 0, gsats = 0, ginview = 0;
                 const bool gfresh = fresh_ms(gps_path);
                 if (gfresh) {
                     std::ifstream f(gps_path);
-                    f >> glat >> glon >> gfix >> gsats;
+                    f >> glat >> glon >> gfix >> gsats >> ginview;
                 }
                 const bool gps_ok = gfresh && gfix >= 1;
 
                 win->set_sensor_available(orient_ok || gps_ok);
+                // Status-bar satellite indicator: 0 = no device/stale (grey),
+                // 1 = present but no fix (yellow), 2 = fix (green).
+                const int gstate = !gfresh ? 0 : (gfix >= 1 ? 2 : 1);
+                win->set_gps_state(gstate);
+                win->set_gps_sats(ginview);
+                win->set_gps_icon((*sat_icons)[gstate]);
 
                 if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);

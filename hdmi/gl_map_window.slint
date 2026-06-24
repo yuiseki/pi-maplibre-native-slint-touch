@@ -51,6 +51,12 @@ export component MapWindow inherits Window {
     in property <int> battery-percent: -1;     // -1 = unknown / hidden
     in property <bool> battery-plugged: false;
 
+    // GPS status (from /dev/shm/pi-gps via C++): state 0=no device (grey),
+    // 1=no fix (yellow), 2=fix (green); gps-sats = satellites in view.
+    in property <int> gps-state: 0;
+    in property <int> gps-sats: 0;
+    in property <image> gps-icon;   // set from C++ (grey/yellow/green satellite)
+
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
     // would otherwise consume Up/Down as zoom). Unhandled keys from other widgets
@@ -142,14 +148,33 @@ export component MapWindow inherits Window {
             }
 
             // Dedicated top status bar (full-width strip above the toolbar).
-            // Battery on the right for now; the left side is reserved for GPS
-            // fix / coords / zoom later.
+            // GPS (satellite icon + sat count) on the left, battery on the right.
             Rectangle {
                 x: 0px;
                 y: 0px;
                 width: 100%;
                 height: 26px;
                 background: #000000c0;
+                // GPS satellite icon: grey=no device, yellow=no fix, green=fix.
+                Image {                     // left; image comes from C++ (SharedPixelBuffer)
+                    x: 8px;
+                    y: 3px;
+                    width: 20px;
+                    height: 20px;
+                    source: root.gps-icon;
+                }
+                Text {                      // satellite count (when GPS present)
+                    x: 32px;
+                    y: 0px;
+                    width: 40px;
+                    height: 100%;
+                    visible: root.gps-state >= 1;
+                    text: root.gps-sats;
+                    color: root.gps-state == 2 ? #6ee06e : #ffd24d;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                }
                 Text {                      // battery, right-aligned
                     x: parent.width - 84px;
                     y: 0px;
