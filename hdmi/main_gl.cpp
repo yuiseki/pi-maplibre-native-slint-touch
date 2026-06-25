@@ -350,6 +350,20 @@ int main(int /*argc*/, char** /*argv*/) {
             if (!*gl_ready)
                 return;
 
+            // While the screensaver is up, the live-map texture is fully hidden
+            // behind the opaque black overlay, so there is no point rendering it
+            // -- or re-arming the free-running render loop below. The 60ms saver
+            // timer drives the bouncing logo/tile frames (plain Slint elements,
+            // independent of the map FBO). Skipping here drops the idle
+            // screensaver from a pegged core to near-zero.
+            //
+            // This is only safe BECAUSE the map is covered: the live map must
+            // render every frame (V3D discards the transient FBO colour
+            // attachment otherwise -- see SlintMapGL::render), which is why the
+            // stage-0 path below re-arms the loop unconditionally.
+            if (win->get_saver_state() != 0)
+                break;
+
             GLint pf = 0;
             glGetIntegerv(GL_FRAMEBUFFER_BINDING, &pf);
             GLint vp[4] = {0, 0, 0, 0};
