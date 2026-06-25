@@ -28,25 +28,42 @@ fi
 command -v xvfb-run >/dev/null || { echo "need xvfb (apt install xvfb)"; exit 1; }
 mkdir -p "$OUT"
 
+# The same styles offered in the on-device dropdown (all self-hosted on
+# yuiseki.dev). The bouncing-tile stage cycles through every PNG in $OUT, so
+# adding more styles/regions here just adds variety — no app change needed.
 S_BRIGHT="https://yuiseki.dev/static/styles/osm-bright.json"
 S_FIORD="https://yuiseki.dev/static/styles/osm-fiord.json"
+S_LIBERTY="https://yuiseki.dev/static/styles/osm-liberty.json"
+S_BASIC="https://yuiseki.dev/static/styles/maptiler-basic-ja.json"
+S_3D="https://yuiseki.dev/static/styles/maptiler-3d.json"
 
-# name lat lon zoom style
+# Start from a clean set so removed entries don't linger on the host.
+rm -f "$OUT"/*.png
+
+# name lat lon zoom style [pitch] [bearing]   (pitch/bearing default 0)
 gen() {
   xvfb-run -a -s "-screen 0 480x480x24" \
-    "$BIN" -s "$5" -o "$OUT/$1.png" -z "$4" -x "$3" -y "$2" -w "$TILE" -h "$TILE" \
+    "$BIN" -s "$5" -o "$OUT/$1.png" -z "$4" -x "$3" -y "$2" \
+    -p "${6:-0}" -b "${7:-0}" -w "$TILE" -h "$TILE" \
     >/dev/null 2>&1
   echo "$1.png -> $(file -b "$OUT/$1.png" 2>&1 | cut -c1-32)"
 }
 
-gen tokyo   35.6895 139.6917 5 "$S_BRIGHT"
-gen paris   48.8566 2.3522   5 "$S_BRIGHT"
-gen ny      40.7128 -74.0060 5 "$S_BRIGHT"
-gen hiro    34.3853 132.4553 6 "$S_BRIGHT"
-gen london  51.5074 -0.1278  5 "$S_FIORD"
-gen sf      37.7749 -122.4194 6 "$S_FIORD"
-gen tokyo9  35.6812 139.7671 9 "$S_BRIGHT"
-gen osaka   34.6937 135.5023 7 "$S_FIORD"
+# OSM Bright
+gen bright-tokyo   35.6895 139.6917  5 "$S_BRIGHT"
+gen bright-osaka   34.6937 135.5023  7 "$S_BRIGHT"
+# OSM Fiord
+gen fiord-paris    48.8566 2.3522    5 "$S_FIORD"
+gen fiord-sf       37.7749 -122.4194 6 "$S_FIORD"
+# OSM Liberty (low zoom shows the Natural Earth shaded relief)
+gen liberty-ny     40.7128 -74.0060  4 "$S_LIBERTY"
+gen liberty-alps   46.5000 8.0000    5 "$S_LIBERTY"
+# MapTiler Basic
+gen basic-hiro     34.3853 132.4553  6 "$S_BASIC"
+gen basic-tokyo9   35.6812 139.7671  9 "$S_BASIC"
+# MapTiler 3D (pitched + slight bearing to show extruded buildings)
+gen 3d-shibuya     35.6595 139.7004 16 "$S_3D" 60 20
+gen 3d-marunouchi  35.6812 139.7649 16 "$S_3D" 55 0
 
 echo "tiles in $OUT:"
 ls -1 "$OUT"
