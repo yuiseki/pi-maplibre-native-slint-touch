@@ -23,18 +23,18 @@ export component MapWindow inherits Window {
     // The ComboBox shows the readable names; selecting one applies the URL at
     // the same index (the two lists are kept parallel).
     property <[string]> style-names: [
-        "OSM Bright 日本語",
+        "OSM Bright",
         "OSM Fiord",
-        "MapTiler Basic 日本語",
-        "MapTiler 3D",
         "OSM Liberty",
+        "MapTiler Basic",
+        "MapTiler 3D",
     ];
     property <[string]> style-urls: [
         "https://yuiseki.dev/static/styles/osm-bright.json",
         "https://yuiseki.dev/static/styles/osm-fiord.json",
+        "https://yuiseki.dev/static/styles/osm-liberty.json",
         "https://yuiseki.dev/static/styles/maptiler-basic-ja.json",
         "https://yuiseki.dev/static/styles/maptiler-3d.json",
-        "https://yuiseki.dev/static/styles/osm-liberty.json",
     ];
 
     // "Dance" toggle: drives the pitch/bearing animation in the C++ backend.
