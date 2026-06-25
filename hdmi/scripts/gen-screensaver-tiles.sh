@@ -32,38 +32,58 @@ mkdir -p "$OUT"
 # yuiseki.dev). The bouncing-tile stage cycles through every PNG in $OUT, so
 # adding more styles/regions here just adds variety — no app change needed.
 S_BRIGHT="https://yuiseki.dev/static/styles/osm-bright.json"
-S_FIORD="https://yuiseki.dev/static/styles/osm-fiord.json"
 S_LIBERTY="https://yuiseki.dev/static/styles/osm-liberty.json"
 S_BASIC="https://yuiseki.dev/static/styles/maptiler-basic-ja.json"
-S_3D="https://yuiseki.dev/static/styles/maptiler-3d.json"
 
 # Start from a clean set so removed entries don't linger on the host.
 rm -f "$OUT"/*.png
 
-# name lat lon zoom style [pitch] [bearing]   (pitch/bearing default 0)
+# name lat lon zoom style
+# Each place is rendered at ~3 zoom levels for variety in the bounce cycle.
 gen() {
   xvfb-run -a -s "-screen 0 480x480x24" \
     "$BIN" -s "$5" -o "$OUT/$1.png" -z "$4" -x "$3" -y "$2" \
-    -p "${6:-0}" -b "${7:-0}" -w "$TILE" -h "$TILE" \
+    -w "$TILE" -h "$TILE" \
     >/dev/null 2>&1
   echo "$1.png -> $(file -b "$OUT/$1.png" 2>&1 | cut -c1-32)"
 }
 
-# OSM Bright
-gen bright-tokyo   35.6895 139.6917  5 "$S_BRIGHT"
-gen bright-osaka   34.6937 135.5023  7 "$S_BRIGHT"
-# OSM Fiord
-gen fiord-paris    48.8566 2.3522    5 "$S_FIORD"
-gen fiord-sf       37.7749 -122.4194 6 "$S_FIORD"
-# OSM Liberty (low zoom shows the Natural Earth shaded relief)
-gen liberty-ny     40.7128 -74.0060  4 "$S_LIBERTY"
-gen liberty-alps   46.5000 8.0000    5 "$S_LIBERTY"
-# MapTiler Basic
-gen basic-hiro     34.3853 132.4553  6 "$S_BASIC"
-gen basic-tokyo9   35.6812 139.7671  9 "$S_BASIC"
-# MapTiler 3D (pitched + slight bearing to show extruded buildings)
-gen 3d-shibuya     35.6595 139.7004 16 "$S_3D" 60 20
-gen 3d-marunouchi  35.6812 139.7649 16 "$S_3D" 55 0
+# OSM Bright — Tokyo / Kyoto
+gen bright-tokyo-z6   35.6895 139.6917  6 "$S_BRIGHT"
+gen bright-tokyo-z11  35.6895 139.6917 11 "$S_BRIGHT"
+gen bright-tokyo-z16  35.6812 139.7671 16 "$S_BRIGHT"
+gen bright-kyoto-z9   35.0116 135.7681  9 "$S_BRIGHT"
+gen bright-kyoto-z13  35.0116 135.7681 13 "$S_BRIGHT"
+gen bright-kyoto-z16  35.0036 135.7780 16 "$S_BRIGHT"
+# OSM Liberty — alpine cities so every zoom has content: Natural Earth
+# shaded relief + labels at low zoom, city detail higher (avoids the
+# "all mountain / all sea" featureless tiles a bare summit/ocean gives).
+gen liberty-matsumoto-z5   36.2381 137.9720  5 "$S_LIBERTY"
+gen liberty-matsumoto-z9   36.2381 137.9720  9 "$S_LIBERTY"
+gen liberty-matsumoto-z13  36.2381 137.9720 13 "$S_LIBERTY"
+gen liberty-innsbruck-z5   47.2692 11.4041   5 "$S_LIBERTY"
+gen liberty-innsbruck-z9   47.2692 11.4041   9 "$S_LIBERTY"
+gen liberty-innsbruck-z13  47.2692 11.4041  13 "$S_LIBERTY"
+# MapTiler Basic — Osaka / Hiroshima
+gen basic-osaka-z6    34.6937 135.5023  6 "$S_BASIC"
+gen basic-osaka-z11   34.6937 135.5023 11 "$S_BASIC"
+gen basic-osaka-z16   34.6863 135.5258 16 "$S_BASIC"
+gen basic-hiro-z8     34.3853 132.4553  8 "$S_BASIC"
+gen basic-hiro-z12    34.3853 132.4553 12 "$S_BASIC"
+gen basic-hiro-z16    34.3955 132.4596 16 "$S_BASIC"
+
+# FOSS4G past host cities (2020 cancelled by COVID): a Liberty wide view
+# (shaded relief shows where in the world) + a city-detail zoom.
+gen foss4g-2021-buenosaires-z5  -34.6037 -58.3816  5 "$S_LIBERTY"
+gen foss4g-2021-buenosaires-z12 -34.6037 -58.3816 12 "$S_BRIGHT"
+gen foss4g-2022-firenze-z5       43.7696  11.2558   5 "$S_LIBERTY"
+gen foss4g-2022-firenze-z13      43.7696  11.2558  13 "$S_BASIC"
+gen foss4g-2023-prizren-z6       42.2139  20.7397   6 "$S_LIBERTY"
+gen foss4g-2023-prizren-z13      42.2139  20.7397  13 "$S_BRIGHT"
+gen foss4g-2024-belem-z5         -1.4558 -48.4902   5 "$S_LIBERTY"
+gen foss4g-2024-belem-z12        -1.4558 -48.4902  12 "$S_BASIC"
+gen foss4g-2025-auckland-z6     -36.8485 174.7633   6 "$S_LIBERTY"
+gen foss4g-2025-auckland-z12    -36.8485 174.7633  12 "$S_BRIGHT"
 
 echo "tiles in $OUT:"
 ls -1 "$OUT"
