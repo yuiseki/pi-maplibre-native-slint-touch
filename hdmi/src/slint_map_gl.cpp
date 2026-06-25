@@ -75,9 +75,6 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
         if (v >= 0.0 && v <= 60.0)  // mbgl caps pitch at 60; >45 explodes tiles
             dance_max_pitch_ = v;
     }
-    if (const char* e = std::getenv("MAPLIBRE_DANCE_STYLE_URL")) {
-        dance_style_url_ = e;  // empty string disables the dance-style swap
-    }
     if (const char* e = std::getenv("MAPLIBRE_PERF")) {
         perf_log_ = (std::atoi(e) != 0);
     }
@@ -113,16 +110,6 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
     map->jumpTo(mbgl::CameraOptions()
                     .withCenter(mbgl::LatLng{clat, clon})
                     .withZoom(czoom));
-
-    // If starting directly in dance mode (MAPLIBRE_ORIENTATION_DEMO), apply the
-    // label-light dance style too, mirroring what the UI Dance button does via
-    // set_dance(). Set MAPLIBRE_DANCE_STYLE_URL="" to disable (e.g. to measure a
-    // specific style under the sweep).
-    if (demo_orientation_ && !dance_style_url_.empty() && styleUrl != dance_style_url_) {
-        dance_prev_style_ = styleUrl;
-        style_url_ = dance_style_url_;
-        map->getStyle().loadURL(dance_style_url_);
-    }
 }
 
 void SlintMapGL::render() {
@@ -399,21 +386,12 @@ void SlintMapGL::set_dance(bool on) {
     std::cout << "[SlintMapGL] dance=" << (on ? "on" : "off") << std::endl;
     if (on) {
         // Restart the sweep phase so pitch eases up from the current (flat) view.
+        // The dance keeps whatever style is currently selected -- pick the
+        // "OSM NoLabel" style for a smooth 60fps dance, or a label-heavy one to
+        // see the FPS cost of per-frame label re-projection.
         demo_start_ = std::chrono::steady_clock::now();
-        // Swap to the label-light dance style (keeps the dance at 60fps; the
-        // camera/center/zoom carry over across the style load). Remember the
-        // current style so we can restore it when the dance stops.
-        if (map && !dance_style_url_.empty() && style_url_ != dance_style_url_) {
-            dance_prev_style_ = style_url_;
-            setStyleUrl(dance_style_url_);
-        }
     } else if (map) {
-        // Calm: restore the pre-dance style, then reset tilt + rotation
-        // (center and zoom are kept).
-        if (!dance_prev_style_.empty() && style_url_ != dance_prev_style_) {
-            setStyleUrl(dance_prev_style_);
-            dance_prev_style_.clear();
-        }
+        // Calm: reset tilt + rotation, keep the current center and zoom.
         map->jumpTo(mbgl::CameraOptions().withPitch(0.0).withBearing(0.0));
         map->triggerRepaint();
         repaint = true;

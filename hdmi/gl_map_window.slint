@@ -24,6 +24,7 @@ export component MapWindow inherits Window {
     // the same index (the two lists are kept parallel).
     property <[string]> style-names: [
         "OSM Bright",
+        "OSM NoLabel",
         "OSM Fiord",
         "OSM Liberty",
         "MapTiler Basic",
@@ -31,6 +32,7 @@ export component MapWindow inherits Window {
     ];
     property <[string]> style-urls: [
         "https://yuiseki.dev/static/styles/osm-bright.json",
+        "https://yuiseki.dev/static/styles/osm-nolabel.json",
         "https://yuiseki.dev/static/styles/osm-fiord.json",
         "https://yuiseki.dev/static/styles/osm-liberty.json",
         "https://yuiseki.dev/static/styles/maptiler-basic-ja.json",

@@ -106,27 +106,38 @@ z16では 60fps 完全ロック**。
 **重要**: z10(広域)は可視の地名ラベルが多く point ラベルも高コスト。**全ズームで Dance を 60fps
 ロックするにはラベル全除去が必要**。Dance は回転する eye-candy なのでラベル無しは見栄え上も自然。
 
-## ★ 解決策（実装・検証済み）
+## ★ 解決策（実装・検証済み）— スタイル選択で見せる
 
-**Dance 用スタイル `osm-bright-dance.json`（= osm-bright から symbol 28層を全除去、128→100層）**
-を pi5 `/data/static/styles/` に配置。全ズーム・フルDance で **60fps 完全ロック**（render ~9ms）。
+**ラベル無しスタイル `osm-nolabel.json`（= osm-bright から symbol 28層を全除去、128→100層、
+name "OSM NoLabel"）** を pi5 `/data/static/styles/` に配置し、**スタイルドロップダウンに
+"OSM NoLabel" を追加**（`gl_map_window.slint`、OSM Bright の直後）。
 
-**アプリ統合**（`slint_map_gl.cpp`）: `set_dance(true)` で現スタイルを退避し
-`MAPLIBRE_DANCE_STYLE_URL`（既定 osm-bright-dance）へ自動切替、`set_dance(false)` で復帰。
-camera(center/zoom)は load 跨ぎで保持。env `MAPLIBRE_ORIENTATION_DEMO=1` 起動経路も同じ swap を通す。
-`MAPLIBRE_DANCE_STYLE_URL=""` で無効化（単体計測用）。
+**Dance は選択中のスタイルのまま**（自動 swap はしない）。これにより
+「スタイルを切り替えると Dance の FPS が変わる」ことをそのままデモできる:
+- OSM Bright で Dance → ラベル再投影が効いて重い
+- OSM NoLabel で Dance → 軽い
 
-**end-to-end 検証**: ORIENTATION_DEMO=1（既定osm-bright, z10）→ 自動で osm-bright-dance へ swap、
-**~58–60fps ロック**（修正前 37–48fps）。通常時は osm-bright 表示・回帰なし。
+**end-to-end 検証**（z10 フル Dance, 選択スタイル維持）:
+
+| 選択スタイル | render | fps |
+|---|---|---|
+| OSM Bright | ~15ms | 40–42（カクつく） |
+| **OSM NoLabel** | **~9ms** | **58–60 ロック** |
+
+全ズームで OSM NoLabel は 60fps ロック（z16 でも render ~9ms）。通常時は選んだスタイルで表示・回帰なし。
 
 ### 副産物の env レバー（本調査で追加, 既定は従来動作）
 - `MAPLIBRE_CENTER=lat,lon,zoom` 起動視点（既定 Tokyo z10）。boot-to-location に有用。
 - `MAPLIBRE_DANCE_MAX_PITCH`（既定45）pitch上限。**perfには無効**（pitchは犯人でない）が無害なノブ。
-- `MAPLIBRE_DANCE_STYLE_URL`（既定 osm-bright-dance）Dance時スタイル。
 
 ### 別解・将来
-- **placeonly**（地名のみ残す, `/data/static/styles/osm-bright-placeonly.json`）: z16=60ロック,
-  z10~50fps。地名を残したい場合の選択肢（`MAPLIBRE_DANCE_STYLE_URL` で切替可）。
+- **地名のみ残す版**: place-* ラベルだけ残すと z16=60ロック / z10~50fps。Dance で地名も見せたい場合の
+  中間案（必要なら osm-placeonly.json を別途用意）。
 - **upstream throttle**: `RenderTreeImpl::prepare()` の毎フレーム `reprojectLineLabels` を回転中
   throttle すれば line ラベルは救えるが、z10 の point ラベルコストは残るため**全ズーム60ロックには
   不足**。スタイル側の解決（symbol除去）が確実で副作用も少ない。採用見送り。
+
+### 経緯メモ
+当初は set_dance() で dance スタイルへ自動 swap する実装にしたが、ユーザ要望で撤回。
+「Dance は選択スタイル維持＋ドロップダウンに OSM NoLabel」に変更し、スタイル差による FPS を
+デモできる形にした。`MAPLIBRE_DANCE_STYLE_URL` と自動 swap コードは削除済み。

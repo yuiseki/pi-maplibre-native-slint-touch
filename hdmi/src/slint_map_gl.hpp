@@ -133,11 +133,6 @@ private:
     bool demo_orientation_ = false;
     double dance_speed_ = 0.5;  // sweep-rate factor; MAPLIBRE_DANCE_SPEED
     double dance_max_pitch_ = 45.0;  // peak dance pitch (deg); MAPLIBRE_DANCE_MAX_PITCH
-    // Auto-switch to a label-light style while dancing (rotation forces a
-    // per-frame symbol re-projection that pegs render time; a symbol-free style
-    // keeps the dance locked at 60fps). MAPLIBRE_DANCE_STYLE_URL; empty disables.
-    std::string dance_style_url_ = "https://yuiseki.dev/static/styles/osm-bright-dance.json";
-    std::string dance_prev_style_;  // style to restore when the dance stops
     std::chrono::steady_clock::time_point demo_start_{};
     std::chrono::steady_clock::time_point fps_last_{};
     int fps_frames_ = 0;
