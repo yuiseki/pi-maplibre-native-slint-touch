@@ -34,6 +34,14 @@ for s in grey yellow green; do
   scp "$HERE/assets/sat-$s.png" "$H":~/sat-$s.png 2>/dev/null || \
     echo "WARN: hdmi/assets/sat-$s.png missing (GPS icon stage $s will be blank)"
 done
+
+# Wi-Fi / network status-bar icons (same mechanism as the satellite icons):
+#   ~/wifi-grey.png  down/disconnected (grey + red X)   ~/wifi-yellow.png  up, no route
+#   ~/wifi-green.png  connected with a default route
+for s in grey yellow green; do
+  scp "$HERE/assets/wifi-$s.png" "$H":~/wifi-$s.png 2>/dev/null || \
+    echo "WARN: hdmi/assets/wifi-$s.png missing (Wi-Fi icon stage $s will be blank)"
+done
 if ls "$HOME/screensaver-tiles/"*.png >/dev/null 2>&1; then
   ssh "$H" 'mkdir -p ~/screensaver-tiles'
   scp "$HOME/screensaver-tiles/"*.png "$H":~/screensaver-tiles/

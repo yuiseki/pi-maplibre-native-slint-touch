@@ -226,6 +226,18 @@ int main(int /*argc*/, char** /*argv*/) {
         win->set_gps_icon((*sat_icons)[0]);
     }
 
+    // Status-bar Wi-Fi icons (grey+red-X / yellow / green), indexed by net state
+    // 0/1/2, loaded the same way as the satellite icons above.
+    auto wifi_icons = std::make_shared<std::array<slint::Image, 3>>();
+    {
+        std::string home =
+            std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
+        (*wifi_icons)[0] = load_png_rgba(home + "/wifi-grey.png");
+        (*wifi_icons)[1] = load_png_rgba(home + "/wifi-yellow.png");
+        (*wifi_icons)[2] = load_png_rgba(home + "/wifi-green.png");
+        win->set_wifi_icon((*wifi_icons)[0]);
+    }
+
     // Pre-rendered map tiles (PNGs from mbgl-render) for the bouncing-tile
     // stage. Loaded once into RGBA SharedPixelBuffers (which render here).
     auto tiles = std::make_shared<std::vector<slint::Image>>();
@@ -600,6 +612,50 @@ int main(int /*argc*/, char** /*argv*/) {
         }).detach();
     }
 
+    // (c2) Network poller. net-state: 0 = the interface is not up (Wi-Fi
+    //      dropped / no carrier) -> grey icon with a red X; 1 = up but no
+    //      default route (associated, no gateway) -> yellow; 2 = up with a
+    //      default route -> green. The interface is whichever owns the default
+    //      route (so it follows Wi-Fi vs Ethernet), overridable with
+    //      MAPLIBRE_NET_IFACE, falling back to wlan0. Off the UI thread.
+    auto net_state = std::make_shared<std::atomic<int>>(0);
+    {
+        auto ns = net_state;
+        const char* ifenv = std::getenv("MAPLIBRE_NET_IFACE");
+        std::string iface_override = ifenv ? ifenv : "";
+        std::thread([ns, iface_override]() {
+            while (true) {
+                // Default-route interface from /proc/net/route (the line whose
+                // hex Destination is 00000000).
+                std::string defroute_if;
+                {
+                    std::ifstream r("/proc/net/route");
+                    std::string ifn, dest, rest;
+                    std::getline(r, rest);  // header
+                    while (r >> ifn >> dest) {
+                        std::getline(r, rest);  // discard the rest of the row
+                        if (dest == "00000000") {
+                            defroute_if = ifn;
+                            break;
+                        }
+                    }
+                }
+                std::string iface = !iface_override.empty() ? iface_override
+                                    : !defroute_if.empty()  ? defroute_if
+                                                            : std::string("wlan0");
+                std::string oper;
+                {
+                    std::ifstream o("/sys/class/net/" + iface + "/operstate");
+                    std::getline(o, oper);
+                }
+                const bool up = (oper == "up");
+                const bool have_route = !defroute_if.empty();
+                ns->store(!up ? 0 : (have_route ? 2 : 1));
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+            }
+        }).detach();
+    }
+
     // (d) Stage driver: a 60ms repeating timer on the UI thread. The
     //     screensaver never touches the live map (tiles are pre-rendered PNGs),
     //     so this just drives the stage, the bounce, the DVD recolour, and the
@@ -694,6 +750,11 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->set_gps_state(gstate);
                 win->set_gps_sats(ginview);
                 win->set_gps_icon((*sat_icons)[gstate]);
+
+                // Status-bar Wi-Fi indicator (polled in thread (c2) above).
+                const int nstate = net_state->load();
+                win->set_net_state(nstate);
+                win->set_wifi_icon((*wifi_icons)[nstate]);
 
                 if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);

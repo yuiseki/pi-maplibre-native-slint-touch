@@ -55,7 +55,13 @@ export component MapWindow inherits Window {
     // 1=no fix (yellow), 2=fix (green); gps-sats = satellites in view.
     in property <int> gps-state: 0;
     in property <int> gps-sats: 0;
-    in property <image> gps-icon;   // set from C++ (grey/yellow/green satellite)
+    in property <image> gps-icon;   // set from C++ (grey+X/yellow/green satellite)
+
+    // Network/Wi-Fi status (from C++): state 0 = disconnected/down (grey with a
+    // red X), 1 = link up but no default route (yellow), 2 = connected with a
+    // default route (green). Lets a Wi-Fi drop be seen at a glance.
+    in property <int> net-state: 0;
+    in property <image> wifi-icon;  // set from C++ (grey+X/yellow/green Wi-Fi glyph)
 
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
@@ -174,6 +180,13 @@ export component MapWindow inherits Window {
                     font-size: 14px;
                     vertical-alignment: center;
                     horizontal-alignment: left;
+                }
+                Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
+                    x: parent.width - 112px;
+                    y: 3px;
+                    width: 20px;
+                    height: 20px;
+                    source: root.wifi-icon;
                 }
                 Text {                      // battery, right-aligned
                     x: parent.width - 84px;
