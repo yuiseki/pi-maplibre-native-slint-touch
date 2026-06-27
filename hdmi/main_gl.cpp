@@ -708,28 +708,31 @@ int main(int /*argc*/, char** /*argv*/) {
                     *net_ssid = ssid;
                 }
 
-                // Bluetooth keyboard connected? A /proc/bus/input/devices block
-                // with Bus=0005 (Bluetooth) whose Handlers include "kbd".
+                // External keyboard connected? A /proc/bus/input/devices block
+                // on Bus=0003 (USB) or Bus=0005 (Bluetooth) whose Handlers
+                // include "kbd". HDMI-CEC (Bus=001e) and platform pseudo-
+                // keyboards live on other buses, so they are excluded.
                 bool kbd = false;
                 {
                     std::ifstream pf("/proc/bus/input/devices");
                     std::string line;
-                    bool bt = false, has_kbd = false;
+                    bool ext = false, has_kbd = false;
                     while (std::getline(pf, line)) {
                         if (line.empty()) {
-                            if (bt && has_kbd) {
+                            if (ext && has_kbd) {
                                 kbd = true;
                                 break;
                             }
-                            bt = false;
+                            ext = false;
                             has_kbd = false;
                         } else if (line.rfind("I:", 0) == 0) {
-                            bt = line.find("Bus=0005") != std::string::npos;
+                            ext = line.find("Bus=0005") != std::string::npos ||
+                                  line.find("Bus=0003") != std::string::npos;
                         } else if (line.rfind("H: Handlers=", 0) == 0) {
                             has_kbd = line.find("kbd") != std::string::npos;
                         }
                     }
-                    if (bt && has_kbd)
+                    if (ext && has_kbd)
                         kbd = true;
                 }
                 kbd_conn->store(kbd);
