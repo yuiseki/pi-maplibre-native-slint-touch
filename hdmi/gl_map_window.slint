@@ -52,6 +52,7 @@ export component MapWindow inherits Window {
     // Battery (PiSugar): percent + charging state for a small corner readout.
     in property <int> battery-percent: -1;     // -1 = unknown / hidden
     in property <bool> battery-plugged: false;
+    in property <image> battery-icon;          // set from C++ (charge/full/high/middle/low)
 
     // GPS status (from /dev/shm/pi-gps via C++): state 0=no device (grey),
     // 1=no fix (yellow), 2=fix (green); gps-sats = satellites in view.
@@ -196,8 +197,16 @@ export component MapWindow inherits Window {
                     visible: root.kbd-connected;
                     source: root.kbd-icon;
                 }
-                Text {                      // Wi-Fi SSID, right-aligned against the Wi-Fi icon
-                    x: parent.width - 240px;
+                // Right cluster, left to right:  [Wi-Fi] SSID  [battery] AC NN%
+                Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
+                    x: parent.width - 260px;
+                    y: 3px;
+                    width: 20px;
+                    height: 20px;
+                    source: root.wifi-icon;
+                }
+                Text {                      // SSID, just right of the Wi-Fi icon
+                    x: parent.width - 236px;
                     y: 0px;
                     width: 122px;
                     height: 100%;
@@ -205,17 +214,19 @@ export component MapWindow inherits Window {
                     text: root.wifi-ssid;
                     color: white;
                     font-size: 14px;
-                    horizontal-alignment: right;
+                    horizontal-alignment: left;
                     vertical-alignment: center;
                 }
-                Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
-                    x: parent.width - 112px;
+                Image {                     // battery level/charge icon (Icons8)
+                    x: parent.width - 110px;
                     y: 3px;
                     width: 20px;
                     height: 20px;
-                    source: root.wifi-icon;
+                    image-fit: contain;
+                    visible: root.battery-percent >= 0;
+                    source: root.battery-icon;
                 }
-                Text {                      // battery, right-aligned
+                Text {                      // battery %, right-aligned at the edge
                     x: parent.width - 84px;
                     y: 0px;
                     width: 76px;

@@ -241,6 +241,19 @@ int main(int /*argc*/, char** /*argv*/) {
         win->set_kbd_icon(load_png_rgba(home + "/kbd-green.png"));
     }
 
+    // Status-bar battery icons (Icons8): index 0=charge(plugged), 1=full,
+    // 2=high, 3=middle, 4=low; chosen by plugged + percent in the UI tick.
+    auto battery_icons = std::make_shared<std::array<slint::Image, 5>>();
+    {
+        std::string home =
+            std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
+        (*battery_icons)[0] = load_png_rgba(home + "/battery-charge.png");
+        (*battery_icons)[1] = load_png_rgba(home + "/battery-full.png");
+        (*battery_icons)[2] = load_png_rgba(home + "/battery-high.png");
+        (*battery_icons)[3] = load_png_rgba(home + "/battery-middle.png");
+        (*battery_icons)[4] = load_png_rgba(home + "/battery-low.png");
+    }
+
     // Pre-rendered map tiles (PNGs from mbgl-render) for the bouncing-tile
     // stage. Loaded once into RGBA SharedPixelBuffers (which render here).
     auto tiles = std::make_shared<std::vector<slint::Image>>();
@@ -791,6 +804,15 @@ int main(int /*argc*/, char** /*argv*/) {
             win->set_saver_state(stage);
             win->set_battery_percent(battery_pct->load());
             win->set_battery_plugged(plugged->load());
+            {
+                const int bpct = battery_pct->load();
+                const int bi = plugged->load() ? 0   // charging
+                               : bpct >= 80     ? 1   // full
+                               : bpct >= 55     ? 2   // high
+                               : bpct >= 30     ? 3   // middle
+                                                : 4;  // low
+                win->set_battery_icon((*battery_icons)[bi]);
+            }
 
             // Sensor "Sync" feed: follow ALL sensors. /dev/shm/pi-orientation
             // gives pitch+bearing, /dev/shm/pi-gps gives lat lon fix sats.

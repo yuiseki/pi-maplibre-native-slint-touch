@@ -24,3 +24,22 @@ Rasterised to 48x48 RGBA PNGs tinted per network state: green (#6ee06e,
 connected with a default route), yellow (#ffd24d, link up but no default
 route), grey (#8a8a8a, interface down / Wi-Fi dropped). The grey icon carries
 a red X for the same at-a-glance reason as the satellite icon.
+
+## kbd-green.png
+
+From the **OOjs UI** "keyboard" icon (MediaWiki / Wikimedia), **MIT** licensed.
+
+Source: https://commons.wikimedia.org/wiki/File:OOjs_UI_icon_keyboard.svg
+
+The single-path glyph was filled green (#6ee06e) and rasterised to 48x48 RGBA.
+Shown in the status bar only while a USB or Bluetooth keyboard is connected.
+
+## battery-charge.png / battery-full.png / battery-high.png / battery-middle.png / battery-low.png
+
+Flat battery icons by **Icons8** (https://icons8.com), via Wikimedia Commons.
+
+Sources: https://commons.wikimedia.org/wiki/File:Icons8_flat_charge_battery.svg
+(and the matching full / high / middle / low "Icons8_flat_*_battery.svg" files).
+
+Rasterised to 48x48 RGBA. Selected by power state: charge when plugged in,
+otherwise full/high/middle/low by battery percent.
