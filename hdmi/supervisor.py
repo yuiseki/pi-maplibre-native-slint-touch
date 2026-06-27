@@ -14,8 +14,11 @@ getty(autologin シェル)」をそのまま使う。マップ(seatd/libseat で
   - MAP 中に USB キーボードの Ctrl+C を 1.5 秒以内に2回 → TERMINAL
   - TERMINAL の shell で `pi-maps` (= /tmp/pi-display/request に "map") → MAP
 
-キーボードは /dev/input/by-id/*-event-kbd を生 evdev で読む(python3-evdev 不要)。
-Slint(libinput)はキーボードを排他 grab しないので並行読取できる。
+キーボードは生 evdev で読む(python3-evdev 不要)。USB は by-id の
+*-event-kbd で拾えるが、Bluetooth(BLE)HID はその symlink を作らないので、
+/proc/bus/input/devices の Handlers に "kbd" を持つ全デバイスの eventN も開く
+(USB/BT どちらの Ctrl+C×2 も効くように)。Slint(libinput)はキーボードを
+排他 grab しないので並行読取できる。
 """
 import glob
 import os
@@ -40,6 +43,41 @@ DOUBLE_WINDOW = 1.5  # Ctrl+C 連続2回とみなす最大間隔 (秒)
 
 def log(*a):
     print("[supervisor]", *a, flush=True)
+
+
+def keyboard_event_nodes():
+    """All keyboard event devices, incl. Bluetooth (which lack a by-id
+    *-event-kbd symlink). Combines the stable by-id symlinks with a parse of
+    /proc/bus/input/devices for any device whose Handlers include 'kbd'.
+    Returns canonical /dev/input/eventN paths (deduped, so a device reachable
+    via both by-id and proc is opened once)."""
+    nodes = set()
+    for p in glob.glob("/dev/input/by-id/*-event-kbd"):
+        nodes.add(os.path.realpath(p))
+    try:
+        with open("/proc/bus/input/devices") as f:
+            blocks, block = [], []
+            for line in f:
+                if line.strip():
+                    block.append(line)
+                else:
+                    blocks.append(block)
+                    block = []
+            blocks.append(block)
+        for b in blocks:
+            handlers = []
+            for line in b:
+                if line.startswith("H: Handlers="):
+                    handlers = line.split("=", 1)[1].split()
+                    break
+            if "kbd" in handlers:
+                for tok in handlers:
+                    if tok.startswith("event"):
+                        nodes.add("/dev/input/" + tok)
+                        break
+    except OSError:
+        pass
+    return nodes
 
 
 def start_map():
@@ -91,11 +129,11 @@ def main():
     kbds = {}  # path -> fd
 
     def rescan_keyboards():
-        for p in glob.glob("/dev/input/by-id/*-event-kbd"):
-            if p not in kbds:
+        for dev in keyboard_event_nodes():
+            if dev not in kbds:
                 try:
-                    kbds[p] = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
-                    log("keyboard:", p)
+                    kbds[dev] = os.open(dev, os.O_RDONLY | os.O_NONBLOCK)
+                    log("keyboard:", dev)
                 except OSError:
                     pass
 

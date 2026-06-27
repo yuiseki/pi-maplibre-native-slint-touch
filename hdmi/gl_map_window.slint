@@ -64,6 +64,11 @@ export component MapWindow inherits Window {
     // default route (green). Lets a Wi-Fi drop be seen at a glance.
     in property <int> net-state: 0;
     in property <image> wifi-icon;  // set from C++ (grey+X/yellow/green Wi-Fi glyph)
+    in property <string> wifi-ssid: "";   // current SSID (C++; truncated to 15 chars)
+
+    // Keyboard: green glyph shown only while a Bluetooth keyboard is connected.
+    in property <bool> kbd-connected: false;
+    in property <image> kbd-icon;   // set from C++ (green keyboard PNG)
 
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
@@ -182,6 +187,26 @@ export component MapWindow inherits Window {
                     font-size: 14px;
                     vertical-alignment: center;
                     horizontal-alignment: left;
+                }
+                Image {                     // keyboard connected (green); hidden otherwise
+                    x: 80px;
+                    y: 3px;
+                    width: 20px;
+                    height: 20px;
+                    visible: root.kbd-connected;
+                    source: root.kbd-icon;
+                }
+                Text {                      // Wi-Fi SSID, right-aligned against the Wi-Fi icon
+                    x: parent.width - 240px;
+                    y: 0px;
+                    width: 122px;
+                    height: 100%;
+                    visible: root.wifi-ssid != "";
+                    text: root.wifi-ssid;
+                    color: white;
+                    font-size: 14px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
                 }
                 Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
                     x: parent.width - 112px;

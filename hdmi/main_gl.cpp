@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <mutex>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -236,6 +237,8 @@ int main(int /*argc*/, char** /*argv*/) {
         (*wifi_icons)[1] = load_png_rgba(home + "/wifi-yellow.png");
         (*wifi_icons)[2] = load_png_rgba(home + "/wifi-green.png");
         win->set_wifi_icon((*wifi_icons)[0]);
+        // Keyboard-connected indicator (green glyph); visibility toggled in slint.
+        win->set_kbd_icon(load_png_rgba(home + "/kbd-green.png"));
     }
 
     // Pre-rendered map tiles (PNGs from mbgl-render) for the bouncing-tile
@@ -633,11 +636,14 @@ int main(int /*argc*/, char** /*argv*/) {
     //      route (so it follows Wi-Fi vs Ethernet), overridable with
     //      MAPLIBRE_NET_IFACE, falling back to wlan0. Off the UI thread.
     auto net_state = std::make_shared<std::atomic<int>>(0);
+    auto net_ssid = std::make_shared<std::string>();
+    auto net_ssid_mtx = std::make_shared<std::mutex>();
+    auto kbd_conn = std::make_shared<std::atomic<bool>>(false);
     {
         auto ns = net_state;
         const char* ifenv = std::getenv("MAPLIBRE_NET_IFACE");
         std::string iface_override = ifenv ? ifenv : "";
-        std::thread([ns, iface_override]() {
+        std::thread([ns, iface_override, net_ssid, net_ssid_mtx, kbd_conn]() {
             while (true) {
                 // Default-route interface from /proc/net/route (the line whose
                 // hex Destination is 00000000).
@@ -665,6 +671,69 @@ int main(int /*argc*/, char** /*argv*/) {
                 const bool up = (oper == "up");
                 const bool have_route = !defroute_if.empty();
                 ns->store(!up ? 0 : (have_route ? 2 : 1));
+
+                // Current SSID for the status bar (truncated to 15 codepoints).
+                std::string ssid;
+                {
+                    std::string cmd =
+                        "/usr/sbin/iw dev " + iface + " link 2>/dev/null";
+                    if (FILE* fp = popen(cmd.c_str(), "r")) {
+                        char buf[256];
+                        while (fgets(buf, sizeof buf, fp)) {
+                            const char* p = std::strstr(buf, "SSID: ");
+                            if (p) {
+                                ssid = p + 6;
+                                while (!ssid.empty() && (ssid.back() == '\n' ||
+                                                         ssid.back() == '\r'))
+                                    ssid.pop_back();
+                                break;
+                            }
+                        }
+                        pclose(fp);
+                    }
+                    size_t i = 0, cps = 0;
+                    while (i < ssid.size() && cps < 15) {
+                        unsigned char c = (unsigned char)ssid[i];
+                        i += (c < 0x80)         ? 1
+                             : (c >> 5) == 0x6  ? 2
+                             : (c >> 4) == 0xE  ? 3
+                             : (c >> 3) == 0x1E ? 4
+                                                : 1;
+                        ++cps;
+                    }
+                    ssid.resize(i);
+                }
+                {
+                    std::lock_guard<std::mutex> lk(*net_ssid_mtx);
+                    *net_ssid = ssid;
+                }
+
+                // Bluetooth keyboard connected? A /proc/bus/input/devices block
+                // with Bus=0005 (Bluetooth) whose Handlers include "kbd".
+                bool kbd = false;
+                {
+                    std::ifstream pf("/proc/bus/input/devices");
+                    std::string line;
+                    bool bt = false, has_kbd = false;
+                    while (std::getline(pf, line)) {
+                        if (line.empty()) {
+                            if (bt && has_kbd) {
+                                kbd = true;
+                                break;
+                            }
+                            bt = false;
+                            has_kbd = false;
+                        } else if (line.rfind("I:", 0) == 0) {
+                            bt = line.find("Bus=0005") != std::string::npos;
+                        } else if (line.rfind("H: Handlers=", 0) == 0) {
+                            has_kbd = line.find("kbd") != std::string::npos;
+                        }
+                    }
+                    if (bt && has_kbd)
+                        kbd = true;
+                }
+                kbd_conn->store(kbd);
+
                 std::this_thread::sleep_for(std::chrono::seconds(3));
             }
         }).detach();
@@ -769,6 +838,11 @@ int main(int /*argc*/, char** /*argv*/) {
                 const int nstate = net_state->load();
                 win->set_net_state(nstate);
                 win->set_wifi_icon((*wifi_icons)[nstate]);
+                {
+                    std::lock_guard<std::mutex> lk(*net_ssid_mtx);
+                    win->set_wifi_ssid(slint::SharedString(net_ssid->c_str()));
+                }
+                win->set_kbd_connected(kbd_conn->load());
 
                 if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);

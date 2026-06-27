@@ -42,6 +42,11 @@ for s in grey yellow green; do
   scp "$HERE/assets/wifi-$s.png" "$H":~/wifi-$s.png 2>/dev/null || \
     echo "WARN: hdmi/assets/wifi-$s.png missing (Wi-Fi icon stage $s will be blank)"
 done
+
+# Keyboard-connected indicator (green keyboard glyph; shown only while a
+# Bluetooth keyboard is connected).
+scp "$HERE/assets/kbd-green.png" "$H":~/kbd-green.png 2>/dev/null || \
+  echo "WARN: hdmi/assets/kbd-green.png missing (keyboard indicator will be blank)"
 if ls "$HOME/screensaver-tiles/"*.png >/dev/null 2>&1; then
   ssh "$H" 'mkdir -p ~/screensaver-tiles'
   scp "$HOME/screensaver-tiles/"*.png "$H":~/screensaver-tiles/
