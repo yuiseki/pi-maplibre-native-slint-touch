@@ -23,6 +23,10 @@ DEFAULT_THRESHOLD = 0.6
 # whisper sometimes renders トライデント in romaji (e.g. "OKTryDent") especially
 # under CPU load; accept those forms too (lowercased substring match).
 ROMAJI_CORES = ("trident", "tryden", "toraiden", "traiden", "torident")
+# Observed katakana mis-hearings of トライデント (the fuzzy ratio for these can
+# dip just under threshold, so accept them as exact garble cores instead).
+GARBLE_CORES = ("トライ弁当", "トライベント", "トライデン", "トラデント",
+                "ドライデント", "トライアイ", "トライエント", "トライ弦")
 
 _STRIP = re.compile(r"[\s　。、，．,.!?！？・「」『』…ー－]")
 
@@ -44,6 +48,9 @@ def wake_score(text, wake=DEFAULT_WAKE, core=DEFAULT_CORE,
         return (False, 0.0, "empty")
     if core and core in n:
         return (True, 1.0, "core")
+    for gc in GARBLE_CORES:
+        if gc in n:
+            return (True, 1.0, f"garble:{gc}")
     low = n.lower()
     for rc in ROMAJI_CORES:
         if rc in low:

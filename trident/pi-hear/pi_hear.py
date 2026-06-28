@@ -18,6 +18,7 @@ Reference: yuiseki/ahear. No PulseAudio here, so capture is pure ALSA.
 """
 import argparse
 import collections
+import contextlib
 import os
 import queue
 import subprocess
@@ -30,6 +31,7 @@ import sounddevice as sd
 
 import wake as wakelib
 import engines as enginelib
+import romaji_match
 
 
 def find_input_device(name_hint):
@@ -59,6 +61,10 @@ PLACES = {
     "福岡": ("fukuoka", "福岡"),
     "那覇": ("naha", "那覇"),
     "沖縄": ("naha", "沖縄"),
+    # whisper-base mishears 沖縄 (okinawa) as お気なお/お気なあ/おきなわ
+    "お気な": ("naha", "沖縄"),
+    "おきなわ": ("naha", "沖縄"),
+    "オキナワ": ("naha", "沖縄"),
 }
 
 
@@ -83,7 +89,13 @@ def main():
     ap.add_argument(
         "--device",
         default="DJI",
-        help="input device name substring (default: DJI), or 'default'",
+        help="sounddevice input name substring (default: DJI), or 'default'",
+    )
+    ap.add_argument(
+        "--alsa-device", default=None,
+        help="capture via arecord from this ALSA PCM instead of sounddevice "
+             "(e.g. 'bluealsa:DEV=20:74:CF:D2:A3:84,PROFILE=sco' for a BT mic "
+             "that PortAudio can't enumerate). Implies S16_LE mono at --samplerate.",
     )
     ap.add_argument("--samplerate", type=int, default=48000,
                     help="capture rate; engines resample to 16k as needed")
@@ -133,6 +145,9 @@ def main():
     ap.add_argument("--act", action="store_true",
                     help="on a wake-matched utterance, resolve a place name, "
                          "confirm via pi-say, and fly the map via pi-flyto")
+    ap.add_argument("--say-device", default="plughw:0,0",
+                    help="ALSA device pi-say uses for confirmations (default "
+                         "3.5mm; use 'btspk' for the Bluetooth headset)")
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute",
                     help="while this file exists, drop all audio (half-duplex: "
                          "pi-say creates it during playback so we don't self-hear)")
@@ -173,7 +188,8 @@ def main():
         # confirmation isn't transcribed back as input.
         try:
             open(args.mute_file, "w").close()
-            subprocess.run(["/usr/local/bin/pi-say", text], timeout=20)
+            subprocess.run(["/usr/local/bin/pi-say", "--device", args.say_device,
+                            text], timeout=20)
         except Exception as e:
             print(f"[act] pi-say error: {e}", file=sys.stderr)
         finally:
@@ -184,16 +200,17 @@ def main():
                 pass
 
     def act(text):
-        matched, score, reason = wakelib.wake_score(
-            text, args.wake_word, args.wake_core, args.wake_threshold)
+        # Romaji + edit-distance matching: collapses kanji/katakana/hiragana
+        # mis-hearings (札幌/サッポロ, 沖縄/お気な, トライデント/トライ弦) by reading.
+        matched, score, _r = romaji_match.wake_match(text)
         if not matched:
             print(f"---- s={score:.2f} '{text}'", flush=True)
             return
-        place = find_place(text)
+        place = romaji_match.find_place(text)
         if not place:
             print(f"WAKE (no place) '{text}'", flush=True)
             return
-        name, key, spoken = place
+        key, spoken, dist = place
         print(f"WAKE -> flyto {key}  '{text}'", flush=True)
         say_muted(f"承知しました。{spoken}を表示します。")
         subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
@@ -206,10 +223,9 @@ def main():
         elif args.no_wake:
             print(text, flush=True)
         else:
-            matched, score, reason = wakelib.wake_score(
-                text, args.wake_word, args.wake_core, args.wake_threshold)
+            matched, score, _r = romaji_match.wake_match(text)
             tag = "WAKE" if matched else "----"
-            print(f"{tag} s={score:.2f} [{reason}] '{text}'", flush=True)
+            print(f"{tag} s={score:.2f} '{text}'", flush=True)
 
     def transcribe_worker():
         # Transcription runs OFF the capture loop. The whisper engine takes
@@ -255,15 +271,40 @@ def main():
     in_speech = False
     peak = 0.0
 
-    stream = sd.InputStream(
-        samplerate=sr, blocksize=args.blocksize, device=dev,
-        channels=1, dtype="float32", callback=callback,
-    )
-    print(f"pi-hear: listening (engine={args.engine}, device={dev}, "
-          f"lang={args.language}, thr={args.threshold}); Ctrl+C to stop",
-          file=sys.stderr, flush=True)
+    arec = None
+    if args.alsa_device:
+        # arecord-based capture for ALSA PCMs PortAudio can't enumerate (e.g. a
+        # bluealsa BT mic). A reader thread feeds audio_q exactly like the
+        # sounddevice callback, so VAD/worker downstream are unchanged.
+        arec = subprocess.Popen(
+            ["arecord", "-q", "-D", args.alsa_device, "-f", "S16_LE",
+             "-r", str(sr), "-c", "1", "-t", "raw"],
+            stdout=subprocess.PIPE)
 
-    with stream:
+        def alsa_reader():
+            nbytes = args.blocksize * 2  # int16 mono
+            while not stop.is_set():
+                buf = arec.stdout.read(nbytes)
+                if not buf or len(buf) < nbytes:
+                    break
+                audio_q.put(
+                    np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0)
+
+        threading.Thread(target=alsa_reader, daemon=True).start()
+        stream_ctx = contextlib.nullcontext()
+        print(f"pi-hear: listening (engine={args.engine}, arecord "
+              f"{args.alsa_device}, lang={args.language}, thr={args.threshold}); "
+              f"Ctrl+C to stop", file=sys.stderr, flush=True)
+    else:
+        stream_ctx = sd.InputStream(
+            samplerate=sr, blocksize=args.blocksize, device=dev,
+            channels=1, dtype="float32", callback=callback,
+        )
+        print(f"pi-hear: listening (engine={args.engine}, device={dev}, "
+              f"lang={args.language}, thr={args.threshold}); Ctrl+C to stop",
+              file=sys.stderr, flush=True)
+
+    with stream_ctx:
         try:
             while True:
                 chunk = audio_q.get()
@@ -329,6 +370,8 @@ def main():
         finally:
             stop.set()
             utt_q.put(None)
+            if arec is not None:
+                arec.terminate()
             engine.close()
 
 
