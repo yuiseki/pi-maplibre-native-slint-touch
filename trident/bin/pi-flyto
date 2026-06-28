@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# pi-flyto: steer the maplibre-slint-gl map via its /dev/shm IPC file.
+#   pi-flyto 34.385 132.455 11   # explicit  lat lon [zoom]
+#   pi-flyto hiroshima           # named place
+#   pi-flyto tokyo
+# The map (hdmi/main_gl.cpp) polls /dev/shm/pi-map-flyto every 200 ms and flies
+# the camera to the written "lat lon [zoom]".
+F=/dev/shm/pi-map-flyto
+declare -A P=(
+  [tokyo]="35.681 139.767 10"
+  [hiroshima]="34.385 132.455 11"
+  [osaka]="34.702 135.495 11"
+  [kyoto]="35.011 135.768 11"
+  [sapporo]="43.062 141.354 10"
+  [fukuoka]="33.590 130.402 11"
+  [naha]="26.212 127.679 11"
+)
+if [ $# -eq 1 ] && [ -n "${P[$1]}" ]; then
+  echo "${P[$1]}" > "$F"; echo "flyto $1: ${P[$1]}"
+elif [ $# -ge 2 ]; then
+  echo "$1 $2 ${3:-11}" > "$F"; echo "flyto $1 $2 ${3:-11}"
+else
+  echo "usage: pi-flyto <lat> <lon> [zoom] | pi-flyto <tokyo|hiroshima|osaka|kyoto|sapporo|fukuoka|naha>" >&2
+  exit 2
+fi

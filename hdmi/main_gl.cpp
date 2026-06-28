@@ -399,7 +399,27 @@ int main(int /*argc*/, char** /*argv*/) {
 
             // Render the live map into the FBO; the MMapView shows it in stage
             // 0. While the screensaver runs the opaque Slint overlay covers it.
-            smap->render();
+            // Skip the (heavy V3D) map render while a FRESH /dev/shm/pi-map-pause
+            // exists: pi-hear touches it during whisper transcription so the
+            // recogniser gets the full CPU and responds faster (the last frame
+            // stays shown). Freshness (<15s, wall-clock vs file mtime, matching
+            // the sensor-feed pattern) keeps a stale flag from freezing the map
+            // if pi-hear dies mid-transcribe.
+            bool map_paused = false;
+            {
+                struct stat pst {};
+                if (::stat("/dev/shm/pi-map-pause", &pst) == 0) {
+                    int64_t rt =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+                    int64_t m = static_cast<int64_t>(pst.st_mtim.tv_sec) * 1000 +
+                                pst.st_mtim.tv_nsec / 1000000;
+                    map_paused = (rt - m) < 15000;
+                }
+            }
+            if (!map_paused)
+                smap->render();
 
             glBindFramebuffer(GL_FRAMEBUFFER, pf);
             glViewport(vp[0], vp[1], vp[2], vp[3]);
@@ -920,6 +940,43 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->set_tile_image((*tiles)[ss->show]);
             }
             win->window().request_redraw();
+        });
+
+    // External fly-to IPC. Any process can steer the camera by writing
+    // "lat lon [zoom]" (zoom optional, default 11) to /dev/shm/pi-map-flyto;
+    // e.g. `echo "34.385 132.455 11" > /dev/shm/pi-map-flyto` flies to
+    // Hiroshima. pi-hear writes this file from a recognised voice command.
+    // Polled on the UI thread (200 ms), so smap->fly_to is as safe here as the
+    // on_request_fly_to toolbar callback. tmpfs (/dev/shm) => no SD wear.
+    auto flyto_timer = std::make_shared<slint::Timer>();
+    auto flyto_mtime = std::make_shared<int64_t>(-1);
+    {
+        // Ignore any pre-existing file at startup (don't fly on boot); only
+        // react to writes made after launch.
+        struct stat st {};
+        if (::stat("/dev/shm/pi-map-flyto", &st) == 0)
+            *flyto_mtime = static_cast<int64_t>(st.st_mtim.tv_sec) * 1000 +
+                           st.st_mtim.tv_nsec / 1000000;
+    }
+    flyto_timer->start(
+        slint::TimerMode::Repeated, std::chrono::milliseconds(200), [=]() {
+            struct stat st {};
+            if (::stat("/dev/shm/pi-map-flyto", &st) != 0)
+                return;
+            int64_t m = static_cast<int64_t>(st.st_mtim.tv_sec) * 1000 +
+                        st.st_mtim.tv_nsec / 1000000;
+            if (m == *flyto_mtime)
+                return;
+            *flyto_mtime = m;
+            std::ifstream f("/dev/shm/pi-map-flyto");
+            double lat = 0.0, lon = 0.0, zoom = 11.0;
+            if (f >> lat >> lon) {
+                f >> zoom;  // optional third field; keeps default if absent
+                std::cout << "[flyto] lat=" << lat << " lon=" << lon
+                          << " zoom=" << zoom << std::endl;
+                last_activity->store(now_ms());  // count as activity (wake saver)
+                smap->fly_to(lat, lon, zoom);
+            }
         });
 
     std::cout << "[main_gl] Entering UI event loop" << std::endl;

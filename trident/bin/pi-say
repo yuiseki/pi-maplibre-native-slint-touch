@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# pi-say: speak Japanese text via piper-plus (tsukuyomi) out the 3.5mm speaker.
+#
+#   pi-say "こんにちは、ラズベリーパイです"     # default gentle rate
+#   pi-say --rate 1.4 "もっとゆっくり"          # override speed (bigger = slower)
+#   echo "標準入力から" | pi-say                # read text from stdin
+#
+# Synthesises to a RAM temp file (/dev/shm, no microSD wear) and plays it with
+# aplay. Voice = tsukuyomi (cute), spoken a touch slow for an unhurried feel.
+set -u
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
+PIPER="${PIPER_BIN:-$HOME/piper-tts/piper/bin/piper}"
+MODEL="tsukuyomi"
+RATE="1.25"            # length_scale: higher = slower / more relaxed
+DEV="plughw:0,0"       # 3.5mm jack (card 0)
+TEXT=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rate)    RATE="${2:-1.25}"; shift 2 || shift;;
+    --model)   MODEL="${2:-tsukuyomi}"; shift 2 || shift;;
+    --device)  DEV="${2:-plughw:0,0}"; shift 2 || shift;;
+    -h|--help)
+      echo "usage: pi-say [--rate N] [--model M] [--device D] \"text\"   (or pipe text via stdin)"
+      echo "  --rate N   speech length_scale (default 1.25; bigger = slower)"
+      exit 0;;
+    *) TEXT="$TEXT $1"; shift;;
+  esac
+done
+TEXT="${TEXT# }"
+
+# stdin fallback when no text given on the command line
+if [ -z "$TEXT" ] && [ ! -t 0 ]; then
+  TEXT="$(cat)"
+fi
+[ -z "$TEXT" ] && { echo "pi-say: no text (try: pi-say \"こんにちは\")" >&2; exit 2; }
+[ -x "$PIPER" ] || { echo "pi-say: piper not found at $PIPER" >&2; exit 1; }
+
+WAV="/dev/shm/pi-say.$$.wav"
+trap 'rm -f "$WAV"' EXIT
+
+if ! "$PIPER" --model "$MODEL" --length_scale "$RATE" --text "$TEXT" \
+       --output_file "$WAV" >/dev/null 2>&1; then
+  echo "pi-say: synthesis failed" >&2
+  exit 1
+fi
+aplay -q -D "$DEV" "$WAV" 2>/dev/null

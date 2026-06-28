@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# pi-hear: listen to the DJI mic and print recognised Japanese text (moonshine).
+# The hearing counterpart to pi-say. See ~/src/pi-hear/pi_hear.py.
+#
+#   pi-hear                      # listen on the DJI mic, print Japanese text
+#   pi-hear --device default     # use PortAudio's default input device
+#
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+exec "$HOME/.venv-ahear/bin/python" "$HOME/src/pi-hear/pi_hear.py" "$@"

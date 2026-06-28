@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# say-muted: speak via pi-say while muting pi-hear (half-duplex, no self-hear).
+# pi-hear watches /tmp/pi-hear/mute and drops all captured audio while it exists,
+# so the spoken confirmation is never transcribed back as a command.
+mkdir -p /tmp/pi-hear
+touch /tmp/pi-hear/mute
+pi-say "$@"
+sleep 0.8          # let the speaker tail pass before re-enabling capture
+rm -f /tmp/pi-hear/mute
