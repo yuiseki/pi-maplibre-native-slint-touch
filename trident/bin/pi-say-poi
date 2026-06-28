@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# pi-say-poi: speak a sentence "The Machine" style (Person of Interest homage):
+# each word in a different English voice, stitched, with a leading beep.
+#   pi-say-poi "can you hear me?"
+#   pi-say-poi --rate 1.25 --gap 0.14 --beep_s 0.5 --beep_hz 1000 "can you hear me?"
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+exec "$HOME/.venv-ahear/bin/python" "$HOME/src/pi-hear/poi_say.py" "$@"

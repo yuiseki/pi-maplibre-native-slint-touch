@@ -129,6 +129,43 @@ pi-flyto tokyo
 - **ビルド/配布**: ビルドは pi5(A76)で `-mcpu=cortex-a72`(pi4 は dotprod 無し、native だと
   illegal instruction)。pi5→pi4 配布は cat パイプ+md5+原子mv(scp/背景実行は Text file busy で破損)。
 
+## POI モード(`pi-say-poi`) — The Machine 風の継ぎ接ぎ音声
+
+Person of Interest の「The Machine」オマージュ。文を**単語ごとに別の英語音声**で喋らせ、
+先頭にビープを付けて継ぎ接ぎする。`bin/pi-say-poi` + `pi-hear/poi_say.py`。
+
+```bash
+pi-say-poi "can you hear me?"                                  # ベスト既定値
+pi-say-poi --rate 1.25 --gap 0.14 --beep_s 0.5 --beep_hz 1000 "can you hear me?"
+```
+
+- **単語→声**はハッシュで決定(同じ単語は常に同じ声=安定スニペット)。声は en_US-ryan/amy,
+  en_GB-alan/southern_english_female の low モデル4種。
+- **キャッシュ**: 単語クリップを `(声, rate, 単語)` 単位で `~/piper-tts/poi-cache/` に保存。
+  piper 合成は初回のみ、以降は連結だけ(~0.3秒)。これが The Machine の本来の仕組み(録音済み
+  単語の継ぎ接ぎ)。
+- **先頭ビープ**は signature であると同時に **Bluetooth SCO のウェイクアップ**(先頭単語の頭切れ防止)。
+- **要らなかった寄り道**: 「文を喋らせて単語境界で分割」は、エネルギー分割も whisper の
+  単語タイムスタンプ(短クリップで縮退)も不安定で断念。**単語ごと孤立合成+キャッシュが確実**。
+- 前提: 英語モデルを `piper --download-model en_US-ryan-low --model-dir ~/piper-tts/en-models`
+  等で4種取得。出力は下の Bluetooth 経由(`btspk`)。
+
+## Bluetooth オーディオ(Aeropex / bluealsa)
+
+PulseAudio 無しの構成で BT ヘッドセット(AfterShokz Aeropex、HFP/SCO 16kHz mSBC)を使う:
+
+- `sudo apt install bluez-alsa-utils libasound2-plugin-bluez`。bluealsa は **HFP-AG を有効化**
+  (`/etc/systemd/system/bluealsa.service.d/override.conf` で `-p a2dp-source -p a2dp-sink
+  -p hfp-ag -p hsp-ag`)。Pi が Audio Gateway 側。
+- `~/.asoundrc` に plug 付き名前付き PCM `btspk`/`btmic`(`type plug` → `type bluealsa,
+  device "20:74:CF:D2:A3:84", profile "sco"`)。**インライン `plug:bluealsa:DEV=...` 構文は不可**。
+- **マイク**: PortAudio(sounddevice)は bluealsa PCM を列挙しない → pi-hear は
+  `--alsa-device "bluealsa:DEV=...,PROFILE=sco" --samplerate 16000`(arecord 経路)で取り込む。
+  **装着(口元)必須**。机置きだと拾えない。
+- **スピーカー**: `--say-device btspk`。SCO 再生は立ち上がりに頭切れ → pi-hear の arecord が SCO を
+  温め続けるので解消(+ POI ビープも保険)。22050→16000 のリサンプルは `plug` が担当。
+- HFP 音量レンジは **0〜15**(0〜100 ではない)。
+
 ## ライセンス注意
 
 moonshine モデルは **Moonshine Community License(非商用)**。製品化時は要確認。
