@@ -20,42 +20,41 @@ ssh "$H" 'sudo systemctl stop maplibre-slint-gl.service 2>/dev/null || true; \
 
 scp "$BIN" "$H":~/maplibre-slint-gl
 
-# Screensaver assets (see docs/hdmi-gl-rendering-notes.md):
-#   ~/dvd-logo.png         DVD logo PNG (decoded to a SharedPixelBuffer in C++)
-#   ~/screensaver-tiles/   pre-rendered map-tile PNGs (scripts/gen-screensaver-tiles.sh)
-scp "$HERE/assets/dvd-logo.png" "$H":~/dvd-logo.png 2>/dev/null || \
+# Assets live under ~/images on the device (C++ loads from $HOME/images/...):
+#   ~/images/dvd-logo.png          DVD logo (SharedPixelBuffer in C++)
+#   ~/images/{sat,wifi,kbd-green,battery-*}.png   status-bar icons
+#   ~/images/screensaver-tiles/    pre-rendered map-tile PNGs (gen-screensaver-tiles.sh)
+ssh "$H" 'mkdir -p ~/images ~/images/screensaver-tiles'
+
+scp "$HERE/assets/dvd-logo.png" "$H":~/images/dvd-logo.png 2>/dev/null || \
   echo "WARN: hdmi/assets/dvd-logo.png missing (DVD stage will be blank)"
 
 # GPS satellite status-bar icons (decoded to SharedPixelBuffers in C++):
-#   ~/sat-grey.png  no GPS device   ~/sat-yellow.png  no fix   ~/sat-green.png  fix
-# (@image-url images do NOT render in this femtovg-GL build, so these are
-#  loaded by path in C++ and pushed via `in property <image>`.)
+#   grey = no GPS device, yellow = no fix, green = fix.
 for s in grey yellow green; do
-  scp "$HERE/assets/sat-$s.png" "$H":~/sat-$s.png 2>/dev/null || \
+  scp "$HERE/assets/sat-$s.png" "$H":~/images/sat-$s.png 2>/dev/null || \
     echo "WARN: hdmi/assets/sat-$s.png missing (GPS icon stage $s will be blank)"
 done
 
 # Wi-Fi / network status-bar icons (same mechanism as the satellite icons):
-#   ~/wifi-grey.png  down/disconnected (grey + red X)   ~/wifi-yellow.png  up, no route
-#   ~/wifi-green.png  connected with a default route
+#   grey+X = down, yellow = up/no route, green = connected with a default route.
 for s in grey yellow green; do
-  scp "$HERE/assets/wifi-$s.png" "$H":~/wifi-$s.png 2>/dev/null || \
+  scp "$HERE/assets/wifi-$s.png" "$H":~/images/wifi-$s.png 2>/dev/null || \
     echo "WARN: hdmi/assets/wifi-$s.png missing (Wi-Fi icon stage $s will be blank)"
 done
 
 # Keyboard-connected indicator (green keyboard glyph; shown only while a
 # USB or Bluetooth keyboard is connected).
-scp "$HERE/assets/kbd-green.png" "$H":~/kbd-green.png 2>/dev/null || \
+scp "$HERE/assets/kbd-green.png" "$H":~/images/kbd-green.png 2>/dev/null || \
   echo "WARN: hdmi/assets/kbd-green.png missing (keyboard indicator will be blank)"
 
 # Battery status icons (Icons8): charge (plugged) / full / high / middle / low.
 for s in charge full high middle low; do
-  scp "$HERE/assets/battery-$s.png" "$H":~/battery-$s.png 2>/dev/null || \
+  scp "$HERE/assets/battery-$s.png" "$H":~/images/battery-$s.png 2>/dev/null || \
     echo "WARN: hdmi/assets/battery-$s.png missing (battery icon $s will be blank)"
 done
 if ls "$HOME/screensaver-tiles/"*.png >/dev/null 2>&1; then
-  ssh "$H" 'mkdir -p ~/screensaver-tiles'
-  scp "$HOME/screensaver-tiles/"*.png "$H":~/screensaver-tiles/
+  scp "$HOME/screensaver-tiles/"*.png "$H":~/images/screensaver-tiles/
 else
   echo "NOTE: no ~/screensaver-tiles/*.png on build host;"
   echo "      run scripts/gen-screensaver-tiles.sh first for the map-tile stage."

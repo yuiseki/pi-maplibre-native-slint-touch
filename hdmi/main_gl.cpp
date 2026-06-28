@@ -210,7 +210,7 @@ int main(int /*argc*/, char** /*argv*/) {
             std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
         std::string p = std::getenv("MAPLIBRE_DVD_LOGO")
                             ? std::getenv("MAPLIBRE_DVD_LOGO")
-                            : (home + "/dvd-logo.png");
+                            : (home + "/images/dvd-logo.png");
         *dvd_mask = load_dvd_mask(p);
         win->set_dvd_image(dvd_tinted(*dvd_mask, 0x50c8ff));
     }
@@ -221,9 +221,9 @@ int main(int /*argc*/, char** /*argv*/) {
     {
         std::string home =
             std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
-        (*sat_icons)[0] = load_png_rgba(home + "/sat-grey.png");
-        (*sat_icons)[1] = load_png_rgba(home + "/sat-yellow.png");
-        (*sat_icons)[2] = load_png_rgba(home + "/sat-green.png");
+        (*sat_icons)[0] = load_png_rgba(home + "/images/sat-grey.png");
+        (*sat_icons)[1] = load_png_rgba(home + "/images/sat-yellow.png");
+        (*sat_icons)[2] = load_png_rgba(home + "/images/sat-green.png");
         win->set_gps_icon((*sat_icons)[0]);
     }
 
@@ -233,12 +233,12 @@ int main(int /*argc*/, char** /*argv*/) {
     {
         std::string home =
             std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
-        (*wifi_icons)[0] = load_png_rgba(home + "/wifi-grey.png");
-        (*wifi_icons)[1] = load_png_rgba(home + "/wifi-yellow.png");
-        (*wifi_icons)[2] = load_png_rgba(home + "/wifi-green.png");
+        (*wifi_icons)[0] = load_png_rgba(home + "/images/wifi-grey.png");
+        (*wifi_icons)[1] = load_png_rgba(home + "/images/wifi-yellow.png");
+        (*wifi_icons)[2] = load_png_rgba(home + "/images/wifi-green.png");
         win->set_wifi_icon((*wifi_icons)[0]);
         // Keyboard-connected indicator (green glyph); visibility toggled in slint.
-        win->set_kbd_icon(load_png_rgba(home + "/kbd-green.png"));
+        win->set_kbd_icon(load_png_rgba(home + "/images/kbd-green.png"));
     }
 
     // Status-bar battery icons (Icons8): index 0=charge(plugged), 1=full,
@@ -247,11 +247,11 @@ int main(int /*argc*/, char** /*argv*/) {
     {
         std::string home =
             std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
-        (*battery_icons)[0] = load_png_rgba(home + "/battery-charge.png");
-        (*battery_icons)[1] = load_png_rgba(home + "/battery-full.png");
-        (*battery_icons)[2] = load_png_rgba(home + "/battery-high.png");
-        (*battery_icons)[3] = load_png_rgba(home + "/battery-middle.png");
-        (*battery_icons)[4] = load_png_rgba(home + "/battery-low.png");
+        (*battery_icons)[0] = load_png_rgba(home + "/images/battery-charge.png");
+        (*battery_icons)[1] = load_png_rgba(home + "/images/battery-full.png");
+        (*battery_icons)[2] = load_png_rgba(home + "/images/battery-high.png");
+        (*battery_icons)[3] = load_png_rgba(home + "/images/battery-middle.png");
+        (*battery_icons)[4] = load_png_rgba(home + "/images/battery-low.png");
     }
 
     // Pre-rendered map tiles (PNGs from mbgl-render) for the bouncing-tile
@@ -262,7 +262,7 @@ int main(int /*argc*/, char** /*argv*/) {
             std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
         std::string dir = std::getenv("MAPLIBRE_TILE_DIR")
                               ? std::getenv("MAPLIBRE_TILE_DIR")
-                              : (home + "/screensaver-tiles");
+                              : (home + "/images/screensaver-tiles");
         std::vector<std::string> names;
         if (DIR* d = opendir(dir.c_str())) {
             while (struct dirent* e = readdir(d)) {
