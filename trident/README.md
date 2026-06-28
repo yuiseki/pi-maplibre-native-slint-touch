@@ -61,8 +61,11 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 cd ~/src/pi-hear
 ~/.venv-ahear/bin/python pi_hear.py \
   --engine whisper --whisper-model ~/src/whisper.cpp/models/ggml-base.bin --whisper-prompt "" \
-  --device Razer --samplerate 16000 --gain 3.5 \
-  --threshold 0.08 --min-speech 0.5 --act
+  --device DJI --samplerate 48000 \
+  --threshold 0.015 --min-speech 0.5 --act
+# ↑ DJI MIC MINI 用。Razer Seiren Mini(デモ録画用)なら:
+#   --device Razer --samplerate 16000 --gain 3.5 --threshold 0.08
+# マイクで設定が違う(下の「マイク」節参照)。--act は ウェイク→地名→pi-say→pi-flyto まで実行。
 
 # 地図を東京へ(待機状態)
 pi-flyto tokyo
@@ -78,6 +81,15 @@ pi-flyto tokyo
   起動時の既存ファイルは無視(boot で飛ばない)。
 - **render-pause**: `/dev/shm/pi-map-pause` が fresh(<15s)な間、地図は `smap->render()` を
   スキップ。pi-hear の worker が ASR 中だけ touch/rm する。map CPU 77→38%、whisper ~24%速。
+- **screensaver-pause**: 地図が saver stage を `/dev/shm/pi-saver-stage`(0=active, 1/2/3=idle)に
+  書き出し、pi-hear は `--saver-pause-stage`(既定1)以上で listening を一時停止する。
+
+## スクリーンセーバー連携(アーキテクチャ判断: タッチ起動)
+
+アイドルが大半を占めるため、**音声起動はやらず、タッチで起こす**(誤爆が少なく低負荷)。
+スクリーンセーバー中(stage>=1)は pi-hear が capture を停止し、CPU・電力・誤起動を抑える。
+タッチで stage→0 になると pi-hear は即再開。声で画面を起こす配線(flyTo が last_activity を
+更新)は残してあるが当面は使わない。
 
 ## ASR / LLM エンジン比較(pi4 = Cortex-A72, dotprod 無し)での知見
 
@@ -92,11 +104,24 @@ pi-flyto tokyo
 
 ## ハマりどころ(hard-won)
 
-- **マイク交換は地獄**: DJI(48kHz)→ Razer(44.1kHz, 低レベル)で大ハマり。
-  (1) PortAudio は arecord(plughw)の約1/3のレベルで取り込む → `--gain 3.5` で補償。
-  (2) 線形補間リサンプル(44100→16000=非整数比)はエイリアシングで音を歪ませる
-      → **`--samplerate 16000` で直接取り込み**、ALSA に適切に変換させる。
-  検証: `arecord -D plughw:3,0 -f S16_LE -r16000 -c1 -d10 x.wav` → whisper-cli で素性確認。
+- **マイクごとに起動引数が違う(交換時は要切替)**:
+
+  | マイク | sounddevice | 起動引数 | 備考 |
+  |---|---|---|---|
+  | **DJI MIC MINI**(常用) | `--device DJI` | `--samplerate 48000`(gainなし) | **48000固定。16000は不可** |
+  | **Razer Seiren Mini**(デモ用) | `--device Razer` | `--samplerate 16000 --gain 3.5` | 44.1kHzネイティブ |
+
+  - **DJI は 16000 で開けない**: `PortAudioError: Invalid sample rate [PaErrorCode -9997]`。
+    48000 で取り込み、`engines.to_16k` の 48k→16k=3:1 線形補間(=実質デシメーション)で綺麗に
+    16k化される(元から良好)。gain 補償も不要。
+  - **Razer は逆の罠2つ**: (1) PortAudio が arecord(plughw)の約1/3のレベルで取り込む
+    → `--gain 3.5` で補償。(2) 44100→16000=非整数比の線形補間リサンプルはエイリアシングで
+    音を歪ませ whisper が `(笑)(音楽)` と誤認 → **`--samplerate 16000` で直接取り込み**、
+    ALSA(plughw)に適切なアンチエイリアス変換をさせる(Razer は 16000 を開ける)。
+  - 切り分け検証: `arecord -D plughw:3,0 -f S16_LE -r 16000 -c1 -d 10 x.wav` で直接録音し
+    `whisper-cli` にかけると、pi-hear 経路と分離してマイク単体の素性が分かる。
+  - 教訓: マイクを替えただけで、ネイティブ rate / PortAudio のレベル / リサンプル品質が変わり、
+    認識が壊滅する。**rate と gain は実機で必ず再調整**(`--debug` の onset/flush peak を見る)。
 - **whisper は負荷時トライデントをローマ字化**(OKTryDent)→ wake.py に `ROMAJI_CORES`。
 - **雑音で whisper 暴走**: gain は雑音も増幅。`--threshold 0.08 --min-speech 0.5` で近接発話だけ発火。
 - **自己集音**: pi-say の音をマイクが拾う → half-duplex(say-muted が `/tmp/pi-hear/mute` を touch)。

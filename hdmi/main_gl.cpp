@@ -819,6 +819,13 @@ int main(int /*argc*/, char** /*argv*/) {
                           << "s, " << (plugged->load() ? "AC" : "battery") << ")"
                           << std::endl;
                 ss->prev = stage;
+                // Publish the saver stage so pi-hear can pause listening while
+                // the screensaver is up (stage>=1). Idle is touch-to-wake, not
+                // voice-wake (fewer false triggers, lower CPU). tmpfs, no SD wear.
+                if (FILE* sf = ::fopen("/dev/shm/pi-saver-stage", "w")) {
+                    ::fprintf(sf, "%d\n", stage);
+                    ::fclose(sf);
+                }
                 win->window().request_redraw();
             }
             win->set_saver_state(stage);

@@ -136,6 +136,11 @@ def main():
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute",
                     help="while this file exists, drop all audio (half-duplex: "
                          "pi-say creates it during playback so we don't self-hear)")
+    ap.add_argument("--saver-file", default="/dev/shm/pi-saver-stage",
+                    help="map writes its screensaver stage here (0=active, >=1 idle)")
+    ap.add_argument("--saver-pause-stage", type=int, default=1,
+                    help="pause listening while saver stage >= this (idle is "
+                         "touch-to-wake, not voice-wake; 0 disables)")
     args = ap.parse_args()
 
     dev = None if args.device == "default" else find_input_device(args.device)
@@ -270,6 +275,20 @@ def main():
                     preroll.clear()
                     silence_dur = 0.0
                     continue
+                # Pause while the map's screensaver is up: idle is touch-to-wake,
+                # not voice-wake (fewer false triggers, lower CPU). The map
+                # publishes its stage to args.saver_file.
+                if args.saver_pause_stage > 0:
+                    try:
+                        with open(args.saver_file) as _sf:
+                            if int(_sf.read().strip() or "0") >= args.saver_pause_stage:
+                                in_speech = False
+                                speech = []
+                                preroll.clear()
+                                silence_dur = 0.0
+                                continue
+                    except (OSError, ValueError):
+                        pass
                 if args.gain != 1.0:
                     chunk = np.clip(chunk * args.gain, -1.0, 1.0)
                 rms = float(np.sqrt(np.mean(chunk ** 2)))
