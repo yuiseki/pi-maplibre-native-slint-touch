@@ -148,6 +148,23 @@ static int64_t now_ms() {
         .count();
 }
 
+// True while a FRESH /dev/shm/pi-map-pause (<15s, wall-clock vs file mtime)
+// exists. pi-hear touches it during ASR so the recogniser gets the full CPU.
+// We honour it by NOT re-arming the render loop (V3D discards a *skipped* FBO
+// -> gray; so instead of skipping the render we stop compositing new frames,
+// which holds the last good frame on screen and frees the core).
+static bool map_render_paused() {
+    struct stat st {};
+    if (::stat("/dev/shm/pi-map-pause", &st) != 0)
+        return false;
+    int64_t rt = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+    int64_t m = static_cast<int64_t>(st.st_mtim.tv_sec) * 1000 +
+                st.st_mtim.tv_nsec / 1000000;
+    return (rt - m) < 15000;
+}
+
 static int64_t env_secs(const char* key, int64_t def) {
     if (const char* e = std::getenv(key)) {
         if (e[0] != '\0') {
@@ -399,27 +416,11 @@ int main(int /*argc*/, char** /*argv*/) {
 
             // Render the live map into the FBO; the MMapView shows it in stage
             // 0. While the screensaver runs the opaque Slint overlay covers it.
-            // Skip the (heavy V3D) map render while a FRESH /dev/shm/pi-map-pause
-            // exists: pi-hear touches it during whisper transcription so the
-            // recogniser gets the full CPU and responds faster (the last frame
-            // stays shown). Freshness (<15s, wall-clock vs file mtime, matching
-            // the sensor-feed pattern) keeps a stale flag from freezing the map
-            // if pi-hear dies mid-transcribe.
-            bool map_paused = false;
-            {
-                struct stat pst {};
-                if (::stat("/dev/shm/pi-map-pause", &pst) == 0) {
-                    int64_t rt =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
-                    int64_t m = static_cast<int64_t>(pst.st_mtim.tv_sec) * 1000 +
-                                pst.st_mtim.tv_nsec / 1000000;
-                    map_paused = (rt - m) < 15000;
-                }
-            }
-            if (!map_paused)
-                smap->render();
+            // ALWAYS render (V3D discards a skipped FBO -> gray). The CPU saving
+            // during a render-pause comes from NOT re-arming the loop below, so
+            // the last good frame is composited once and then held on screen.
+            const bool map_paused = map_render_paused();
+            smap->render();
 
             glBindFramebuffer(GL_FRAMEBUFFER, pf);
             glViewport(vp[0], vp[1], vp[2], vp[3]);
@@ -451,7 +452,12 @@ int main(int /*argc*/, char** /*argv*/) {
                     *tex,
                     {static_cast<uint32_t>(*Wp), static_cast<uint32_t>(*Hp)},
                     slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft));
-            win->window().request_redraw();
+            // Re-arm the free-running render loop ONLY when not paused. While
+            // paused we stop requesting redraws, so this just-composited good
+            // frame is the last one presented and stays on screen (V3D-safe,
+            // no gray). The 60ms saver timer restarts the loop on un-pause.
+            if (!map_paused)
+                win->window().request_redraw();
             break;
         }
         case slint::RenderingState::AfterRendering: {
@@ -923,6 +929,12 @@ int main(int /*argc*/, char** /*argv*/) {
                     }
                 }
             }
+
+            // Stage 0: keep the live-map render loop alive and restart it when a
+            // render-pause ends (BeforeRendering stops re-arming while paused,
+            // so without this the map would stay frozen after un-pause).
+            if (stage == 0 && !map_render_paused())
+                win->window().request_redraw();
 
             if (stage != 1 && stage != 2)
                 return;

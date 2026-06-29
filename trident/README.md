@@ -79,8 +79,11 @@ pi-flyto tokyo
 - **flyTo**: `echo "34.385 132.455 11" > /dev/shm/pi-map-flyto`(`lat lon [zoom]`)。
   main_gl.cpp の Slint タイマーが 200ms ごとに mtime を見て `smap->fly_to()` を呼ぶ。
   起動時の既存ファイルは無視(boot で飛ばない)。
-- **render-pause**: `/dev/shm/pi-map-pause` が fresh(<15s)な間、地図は `smap->render()` を
-  スキップ。pi-hear の worker が ASR 中だけ touch/rm する。map CPU 77→38%、whisper ~24%速。
+- **render-pause**: `/dev/shm/pi-map-pause` が fresh(<15s)な間、地図は**良いフレームを1枚描いてから
+  描画ループの再アーム(`request_redraw`)を止める**。pi-hear の worker が ASR 中だけ touch/rm する。
+  map CPU 82→0%(whisper に CPU を明け渡す)、解除すると 60ms の saver_timer(stage 0)が再アームして復帰。
+  ※ `smap->render()` 自体をスキップすると V3D が一時 FBO のカラーアタッチメントを破棄して画面が灰色になる。
+  だから「描画はスキップせず再アームだけ止める」=最後の良いフレームが画面に保持される。
 - **screensaver-pause**: 地図が saver stage を `/dev/shm/pi-saver-stage`(0=active, 1/2/3=idle)に
   書き出し、pi-hear は `--saver-pause-stage`(既定1)以上で listening を一時停止する。
 
