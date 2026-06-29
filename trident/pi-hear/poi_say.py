@@ -10,7 +10,6 @@ isn't clipped). Plays to --play (default btspk = the Aeropex BT headset).
   pi-say-poi --rate 1.5 --gap 0.22 --beep_s 0.5 --beep_hz 1000 "can you hear me?"
 """
 import argparse
-import hashlib
 import os
 import re
 import subprocess
@@ -23,9 +22,17 @@ PIPER = os.path.expanduser("~/piper-tts/piper/bin/piper")
 MDIR = os.path.expanduser("~/piper-tts/en-models")
 CACHE = os.path.expanduser("~/piper-tts/poi-cache")
 SR = 16000
-VOICES = ["en_US-ryan-low", "en_US-amy-low",
-          "en_GB-alan-low", "en_GB-southern_english_female-low"]
+# The Machine alternates voices by gender: female, male, female, male, ...
+# Within each gender we rotate between two voices for extra variety.
+FEMALE = ["en_US-amy-low", "en_GB-southern_english_female-low"]
+MALE = ["en_US-ryan-low", "en_GB-alan-low"]
 os.makedirs(CACHE, exist_ok=True)
+
+
+def voice_for_position(i):
+    """Word i: even -> female, odd -> male; rotate within each gender."""
+    pool = FEMALE if i % 2 == 0 else MALE
+    return pool[(i // 2) % len(pool)]
 
 
 def beep(beep_s, beep_hz):
@@ -38,21 +45,15 @@ def beep(beep_s, beep_hz):
     return s
 
 
-def voice_for(word):
-    h = int(hashlib.md5(word.lower().encode()).hexdigest(), 16)
-    return VOICES[h % len(VOICES)]
-
-
-def cache_path(word, rate):
+def cache_path(word, rate, voice):
     safe = re.sub(r"[^a-z0-9]+", "_", word.lower()).strip("_") or "x"
-    return os.path.join(CACHE, f"{voice_for(word)}__r{rate}__{safe}.wav")
+    return os.path.join(CACHE, f"{voice}__r{rate}__{safe}.wav")
 
 
-def get_word(word, rate):
-    """int16 samples (16 kHz) for a word; synthesise+cache if missing."""
-    path = cache_path(word, rate)
+def get_word(word, rate, voice):
+    """int16 samples (16 kHz) for a word in `voice`; cache by (voice,rate,word)."""
+    path = cache_path(word, rate, voice)
     if not os.path.exists(path):
-        voice = voice_for(word)
         tmp = "/dev/shm/poi_tmp.wav"
         env = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8")
         subprocess.run([PIPER, "--model", f"{MDIR}/{voice}.onnx",
@@ -96,8 +97,8 @@ def main():
     gap16 = np.zeros(int(args.gap * SR), dtype="<i2")
     beep16 = (np.clip(beep(args.beep_s, args.beep_hz), -1, 1) * 32767).astype("<i2")
     parts = [beep16, np.zeros(int(0.1 * SR), dtype="<i2")]
-    for word in words:
-        parts.append(get_word(word, args.rate))
+    for i, word in enumerate(words):
+        parts.append(get_word(word, args.rate, voice_for_position(i)))
         parts.append(gap16)
     out = np.concatenate(parts)
     o = wave.open("/dev/shm/poi.wav", "wb")
