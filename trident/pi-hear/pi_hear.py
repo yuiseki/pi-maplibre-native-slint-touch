@@ -173,6 +173,12 @@ def main():
 
     audio_q = queue.Queue()
     utt_q = queue.Queue()
+    # whisper-base on the Pi 4 A72 can't keep up with continuous speech/noise, so
+    # an unbounded utt_q grows to dozens of stale utterances (observed ~70) that
+    # keep firing minutes-old commands long after they were spoken. For a voice
+    # appliance only the most recent utterance matters, so cap the backlog and
+    # drop the oldest when full.
+    UTT_Q_MAX = 3
     stop = threading.Event()
 
     def callback(indata, frames, time_info, status):
@@ -199,7 +205,24 @@ def main():
             except OSError:
                 pass
 
+    def saver_active():
+        # True while the map's screensaver is up (stage >= pause threshold).
+        if args.saver_pause_stage <= 0:
+            return False
+        try:
+            with open(args.saver_file) as _sf:
+                return int(_sf.read().strip() or "0") >= args.saver_pause_stage
+        except (OSError, ValueError):
+            return False
+
     def act(text):
+        # Touch-to-wake, not voice-wake: while the screensaver is up, ignore
+        # voice commands entirely. An utterance already in flight in the worker
+        # can finish after the screensaver engages; acting on it would wake the
+        # screen and contradict the touch-to-wake design.
+        if saver_active():
+            print(f"---- (saver up, ignored) '{text}'", flush=True)
+            return
         # Romaji + edit-distance matching: collapses kanji/katakana/hiragana
         # mis-hearings (札幌/サッポロ, 沖縄/お気な, トライデント/トライ弦) by reading.
         matched, score, _r = romaji_match.wake_match(text)
@@ -327,6 +350,15 @@ def main():
                                 speech = []
                                 preroll.clear()
                                 silence_dur = 0.0
+                                # Also drop anything already queued: a backlog
+                                # captured just before the screensaver engaged
+                                # must not drain-fire commands (and wake the
+                                # screen) while the device is meant to be idle.
+                                while not utt_q.empty():
+                                    try:
+                                        utt_q.get_nowait()
+                                    except queue.Empty:
+                                        break
                                 continue
                     except (OSError, ValueError):
                         pass
@@ -363,7 +395,14 @@ def main():
                             print(f"[drop] dur={dur:.1f}s peak={peak:.4f} (short)",
                                   file=sys.stderr, flush=True)
                         continue
-                    # hand the utterance to the worker; never block capture
+                    # hand the utterance to the worker; never block capture.
+                    # Drop the oldest queued utterances when the worker has
+                    # fallen behind, so the backlog can't snowball (see UTT_Q_MAX).
+                    while utt_q.qsize() >= UTT_Q_MAX:
+                        try:
+                            utt_q.get_nowait()
+                        except queue.Empty:
+                            break
                     utt_q.put((samples, dur, peak))
         except KeyboardInterrupt:
             pass
