@@ -5,12 +5,16 @@
 #   pi-say --rate 1.4 "もっとゆっくり"          # override speed (bigger = slower)
 #   echo "標準入力から" | pi-say                # read text from stdin
 #
-# Synthesises to a RAM temp file (/dev/shm, no microSD wear) and plays it with
-# aplay. Voice = tsukuyomi (cute), spoken a touch slow for an unhurried feel.
+# Result WAVs are cached by (model, rate, text): a fixed phrase like the
+# "承知しました。…を表示します。" confirmation is synthesised once and then just
+# replayed, so the wake->confirm latency drops to an aplay. Each unique phrase
+# costs exactly one small WAV on the SD (negligible wear); set PI_SAY_NO_CACHE=1
+# to bypass. Voice = tsukuyomi (cute), spoken a touch slow for an unhurried feel.
 set -u
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 
 PIPER="${PIPER_BIN:-$HOME/piper-tts/piper/bin/piper}"
+CACHE_DIR="${PI_SAY_CACHE_DIR:-$HOME/piper-tts/say-cache}"
 MODEL="tsukuyomi"
 RATE="1.25"            # length_scale: higher = slower / more relaxed
 DEV="plughw:0,0"       # 3.5mm jack (card 0)
@@ -37,12 +41,28 @@ fi
 [ -z "$TEXT" ] && { echo "pi-say: no text (try: pi-say \"こんにちは\")" >&2; exit 2; }
 [ -x "$PIPER" ] || { echo "pi-say: piper not found at $PIPER" >&2; exit 1; }
 
-WAV="/dev/shm/pi-say.$$.wav"
-trap 'rm -f "$WAV"' EXIT
+synth_to() {
+  # $1 = output wav path. Returns piper's exit status.
+  "$PIPER" --model "$MODEL" --length_scale "$RATE" --text "$TEXT" \
+    --output_file "$1" >/dev/null 2>&1
+}
 
-if ! "$PIPER" --model "$MODEL" --length_scale "$RATE" --text "$TEXT" \
-       --output_file "$WAV" >/dev/null 2>&1; then
-  echo "pi-say: synthesis failed" >&2
-  exit 1
+if [ -n "${PI_SAY_NO_CACHE:-}" ]; then
+  WAV="/dev/shm/pi-say.$$.wav"
+  trap 'rm -f "$WAV"' EXIT
+  synth_to "$WAV" || { echo "pi-say: synthesis failed" >&2; exit 1; }
+else
+  mkdir -p "$CACHE_DIR"
+  # Key on everything that changes the audio. md5 of UTF-8 bytes is fine for JA.
+  KEY="$(printf '%s\x1f%s\x1f%s' "$MODEL" "$RATE" "$TEXT" | md5sum | cut -d' ' -f1)"
+  WAV="$CACHE_DIR/$KEY.wav"
+  if [ ! -s "$WAV" ]; then
+    # Synthesise to a temp in the cache dir, then rename (atomic on one fs, so a
+    # concurrent pi-say never reads a half-written file).
+    TMP="$WAV.$$.tmp"
+    trap 'rm -f "$TMP"' EXIT
+    synth_to "$TMP" || { echo "pi-say: synthesis failed" >&2; exit 1; }
+    mv -f "$TMP" "$WAV"
+  fi
 fi
 aplay -q -D "$DEV" "$WAV" 2>/dev/null

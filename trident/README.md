@@ -38,7 +38,7 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 | `pi-hear/wake.py` | ウェイクワード「トライデント」のファジー照合(katakana core + ローマ字) |
 | `pi-hear/engines.py` | ASR エンジン抽象。`MoonshineEngine` / `WhisperCppEngine`(`--engine`で切替) |
 | `pi-hear/pi-hear` | venv 起動ラッパー |
-| `bin/pi-say` | 日本語TTS(piper-plus tsukuyomi → 3.5mmジャック) |
+| `bin/pi-say` | 日本語TTS(piper-plus tsukuyomi → 3.5mmジャック)。結果WAVを (model,rate,text) でキャッシュ(`~/piper-tts/say-cache/`)。定型文「承知しました。…を表示します。」は piper 合成が A72 で **~6秒**かかるので、初回のみ合成→以降は再生のみ(~3秒=音声長)に短縮。`PI_SAY_NO_CACHE=1` で無効化 |
 | `bin/say-muted` | pi-say を half-duplex 化(再生中は pi-hear をミュートして自己集音回避) |
 | `bin/pi-flyto` | 地図IPC クライアント。`pi-flyto hiroshima` 等で `/dev/shm/pi-map-flyto` に書く |
 | `../hdmi/main_gl.cpp` | 地図アプリ(C++/Slint/femtovg-GL)。**flyTo IPC タイマー + render-pause** を追加済み |
