@@ -215,6 +215,19 @@ def main():
         except (OSError, ValueError):
             return False
 
+    # After the wake word, accept the place from a *following* utterance for this
+    # many seconds. Users naturally pause between "トライデント" and the place name,
+    # which the VAD splits into two utterances; without this the wake-only segment
+    # and the place-only segment each fail (one lacks a place, the other a wake).
+    ARM_WINDOW = 8.0
+    armed_until = [0.0]   # wall-clock; > now while armed (mutable cell for closure)
+
+    def do_flyto(place, text):
+        key, spoken, dist = place
+        print(f"WAKE -> flyto {key}  '{text}'", flush=True)
+        say_muted(f"承知しました。{spoken}を表示します。")
+        subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
+
     def act(text):
         # Touch-to-wake, not voice-wake: while the screensaver is up, ignore
         # voice commands entirely. An utterance already in flight in the worker
@@ -226,17 +239,23 @@ def main():
         # Romaji + edit-distance matching: collapses kanji/katakana/hiragana
         # mis-hearings (札幌/サッポロ, 沖縄/お気な, トライデント/トライ弦) by reading.
         matched, score, _r = romaji_match.wake_match(text)
-        if not matched:
-            print(f"---- s={score:.2f} '{text}'", flush=True)
-            return
         place = romaji_match.find_place(text)
-        if not place:
-            print(f"WAKE (no place) '{text}'", flush=True)
-            return
-        key, spoken, dist = place
-        print(f"WAKE -> flyto {key}  '{text}'", flush=True)
-        say_muted(f"承知しました。{spoken}を表示します。")
-        subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
+        armed = time.time() < armed_until[0]
+
+        if matched and place:                 # wake + place in one breath
+            armed_until[0] = 0.0
+            do_flyto(place, text)
+        elif matched:                          # wake only -> arm for the place
+            armed_until[0] = time.time() + ARM_WINDOW
+            print(f"WAKE (armed {ARM_WINDOW:.0f}s, awaiting place) '{text}'",
+                  flush=True)
+        elif armed and place:                  # place arrived just after the wake
+            armed_until[0] = 0.0
+            do_flyto(place, text)
+        elif armed:                            # still armed, no place yet
+            print(f"---- (armed, no place yet) '{text}'", flush=True)
+        else:
+            print(f"---- s={score:.2f} '{text}'", flush=True)
 
     def emit(text):
         if not text:
