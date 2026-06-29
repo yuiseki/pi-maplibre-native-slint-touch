@@ -172,7 +172,9 @@ pi-say-poi --rate 1.25 --gap 0.14 --beep_s 0.5 --beep_hz 1000 "can you hear me?"
 - **要らなかった寄り道**: 「文を喋らせて単語境界で分割」は、エネルギー分割も whisper の
   単語タイムスタンプ(短クリップで縮退)も不安定で断念。**単語ごと孤立合成+キャッシュが確実**。
 - 前提: 英語モデルを `piper --download-model en_US-ryan-low --model-dir ~/piper-tts/en-models`
-  等で4種取得。出力は下の Bluetooth 経由(`btspk`)。
+  等で4種取得。出力は **`--play`(既定 btspk)→ 失敗時 `--fallback`(既定 plughw:0,0=3.5mm)**
+  へ自動フォールバック(BT未接続なら aplay が即 "No such device" で落ち→3.5mmで再生)。
+  3.5mm はジャック検出が無く常に受理する終端フォールバック。
 
 ## Bluetooth オーディオ(Aeropex / bluealsa)
 

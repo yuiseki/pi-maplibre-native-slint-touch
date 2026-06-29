@@ -85,7 +85,10 @@ def main():
     ap.add_argument("--gap", type=float, default=0.14, help="silence between words (s)")
     ap.add_argument("--beep_s", type=float, default=0.5, help="leading beep length (s)")
     ap.add_argument("--beep_hz", type=float, default=1000.0, help="beep frequency (Hz)")
-    ap.add_argument("--play", default="btspk", help="ALSA device to play to ('' = none)")
+    ap.add_argument("--play", default="btspk",
+                    help="preferred ALSA device; falls back to --fallback ('' = none)")
+    ap.add_argument("--fallback", default="plughw:0,0",
+                    help="fallback ALSA device if --play fails (e.g. BT not connected)")
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute")
     args = ap.parse_args()
 
@@ -107,11 +110,29 @@ def main():
     if args.play:
         os.makedirs(os.path.dirname(args.mute_file), exist_ok=True)
         open(args.mute_file, "w").close()        # half-duplex: don't self-hear
-        subprocess.run(["aplay", "-q", "-D", args.play, "/dev/shm/poi.wav"])
+        # Try the preferred device (e.g. BT btspk, detectable: aplay fails fast
+        # if not connected), then the fallback (3.5mm plughw:0,0, which has no
+        # jack detection and always accepts audio = terminal fallback).
+        devices = [d for d in (args.play, args.fallback) if d]
+        played = False
+        for d in devices:
+            try:
+                r = subprocess.run(["aplay", "-q", "-D", d, "/dev/shm/poi.wav"],
+                                   timeout=30)
+                if r.returncode == 0:
+                    if d != devices[0]:
+                        print(f"poi: {devices[0]} unavailable, played on {d}",
+                              file=sys.stderr)
+                    played = True
+                    break
+            except Exception as e:
+                print(f"poi: {d} failed: {e}", file=sys.stderr)
         try:
             os.remove(args.mute_file)
         except OSError:
             pass
+        if not played:
+            print("poi: no audio device available", file=sys.stderr)
 
 
 if __name__ == "__main__":
