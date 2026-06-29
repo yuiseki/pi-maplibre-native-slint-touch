@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -12,9 +13,11 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <iostream>
+#include <linux/input.h>
 #include <memory>
 #include <poll.h>
 #include <slint.h>
+#include <sys/ioctl.h>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -631,6 +634,117 @@ int main(int /*argc*/, char** /*argv*/) {
                 }
                 if (any)
                     la->store(now_ms());
+            }
+        }).detach();
+    }
+
+    // (a2) Keyboard Ctrl+C x2 -> wake. The touch watcher (a) is restricted to
+    //   the touchscreen (MAPLIBRE_INPUT_DEVS) so stray HID/HDMI "keys" can't wake
+    //   the screensaver, but a deliberate Ctrl+C pressed twice within 1.5s on a
+    //   real keyboard also wakes -- handy over a USB or Bluetooth keyboard
+    //   without reaching for the panel. ONLY this exact combo wakes (arbitrary
+    //   keys are ignored). Keyboards are auto-discovered by KEY_C capability
+    //   (excludes the USB-mic HID and HDMI nodes, which lack letter keys) and
+    //   re-scanned every 2s so a Bluetooth keyboard paired after boot is picked
+    //   up; a device that disappears (BT disconnect) is dropped and re-added on
+    //   reconnect.
+    {
+        auto la = last_activity;
+        std::thread([la]() {
+            struct KbdFd {
+                int fd;
+                std::string path;
+            };
+            std::vector<KbdFd> kbds;
+            auto has_key_c = [](int fd) {
+                unsigned long bits[(KEY_MAX / (8 * sizeof(unsigned long))) + 1];
+                std::memset(bits, 0, sizeof(bits));
+                if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), bits) < 0)
+                    return false;
+                return ((bits[KEY_C / (8 * sizeof(unsigned long))] >>
+                         (KEY_C % (8 * sizeof(unsigned long)))) &
+                        1UL) != 0;
+            };
+            auto rescan = [&]() {
+                DIR* d = opendir("/dev/input");
+                if (!d)
+                    return;
+                while (struct dirent* e = readdir(d)) {
+                    if (std::strncmp(e->d_name, "event", 5) != 0)
+                        continue;
+                    std::string path = std::string("/dev/input/") + e->d_name;
+                    bool open_already = false;
+                    for (auto& k : kbds)
+                        if (k.path == path) {
+                            open_already = true;
+                            break;
+                        }
+                    if (open_already)
+                        continue;
+                    int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+                    if (fd < 0)
+                        continue;
+                    if (has_key_c(fd))
+                        kbds.push_back({fd, path});
+                    else
+                        close(fd);
+                }
+                closedir(d);
+            };
+            bool ctrl_down = false;
+            int64_t last_cc = 0;   // time of the previous Ctrl+C (0 = none pending)
+            int64_t last_scan = 0;
+            while (true) {
+                int64_t now = now_ms();
+                if (now - last_scan > 2000) {   // pick up USB/BT hotplug
+                    rescan();
+                    last_scan = now;
+                }
+                if (kbds.empty()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    continue;
+                }
+                std::vector<pollfd> pfds;
+                pfds.reserve(kbds.size());
+                for (auto& k : kbds)
+                    pfds.push_back({k.fd, POLLIN, 0});
+                if (poll(pfds.data(), pfds.size(), 1000) <= 0)
+                    continue;
+                for (size_t i = 0; i < pfds.size(); ++i) {
+                    if (pfds[i].revents & (POLLERR | POLLHUP)) {
+                        close(kbds[i].fd);   // device gone (e.g. BT disconnect)
+                        kbds[i].fd = -1;
+                        continue;
+                    }
+                    if (!(pfds[i].revents & POLLIN))
+                        continue;
+                    struct input_event ev;
+                    ssize_t n;
+                    while ((n = read(pfds[i].fd, &ev, sizeof(ev))) ==
+                           (ssize_t)sizeof(ev)) {
+                        if (ev.type != EV_KEY)
+                            continue;
+                        if (ev.code == KEY_LEFTCTRL || ev.code == KEY_RIGHTCTRL) {
+                            ctrl_down = (ev.value != 0);   // 1=press, 2=repeat
+                        } else if (ev.code == KEY_C && ev.value == 1 &&
+                                   ctrl_down) {
+                            int64_t t = now_ms();
+                            if (last_cc != 0 && t - last_cc <= 1500) {
+                                la->store(t);   // Ctrl+C x2 within 1.5s -> wake
+                                last_cc = 0;
+                            } else {
+                                last_cc = t;
+                            }
+                        }
+                    }
+                    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        close(kbds[i].fd);
+                        kbds[i].fd = -1;
+                    }
+                }
+                kbds.erase(std::remove_if(kbds.begin(), kbds.end(),
+                                          [](const KbdFd& k) { return k.fd < 0; }),
+                           kbds.end());
             }
         }).detach();
     }

@@ -102,6 +102,7 @@ hdmi/scripts/run.sh             # tmux session 'mapgl'; logs to ~/map-gl.log
 | `MAPLIBRE_TILE_DIR` | Directory of pre-rendered map-tile PNGs (default `~/screensaver-tiles`) |
 | `MAPLIBRE_DVD_LOGO` | DVD logo PNG path (default `~/dvd-logo.png`) |
 | `MAPLIBRE_SELFTEST` | When `1`, freeze the bounce and log per-stage pixel-readback assertions (TDD; see docs) |
+| `MAPLIBRE_INPUT_DEVS` | Comma-separated `/dev/input/event*` paths the idle watcher treats as wake input (default: all). **Set this to the touchscreen only** so the USB-mic HID keyboard / HDMI kbd nodes can't spuriously wake the screensaver (touch-to-wake). e.g. `/dev/input/by-path/platform-fe204000.spi-cs-1-event` |
 
 ## Screensaver
 
@@ -141,13 +142,26 @@ does, but here the "terminal" is simply the Linux console on `tty1`:
 
 - **MAP** (default): the supervisor runs `maplibre-slint-gl` (it holds the HDMI
   via seatd/libseat).
-- **Ctrl+C twice within 1.5 s** on the keyboard -> the supervisor stops the map;
-  releasing DRM lets the `tty1` console (fbcon) reappear on the HDMI = **TERMINAL**.
+- **Ctrl+C twice within 1.5 s** on the keyboard is **context-sensitive**:
+  - while the **screensaver is up** -> **WAKE** the live map (the supervisor sees
+    `/dev/shm/pi-saver-stage >= 1` and does *not* drop to the console; the map
+    binary's own Ctrl+C x2 watcher resets its idle clock to wake);
+  - while the **live map is shown** -> the supervisor stops the map and releasing
+    DRM lets the `tty1` console (fbcon) reappear on the HDMI = **TERMINAL**.
 - In that shell, run **`pi-maps`** (or `pi-map`) -> the supervisor restarts the map.
 
-The supervisor reads the keyboard directly from `/dev/input/by-id/*-event-kbd`
-(raw `input_event`, no `python3-evdev` needed); Slint/libinput does not grab it
-exclusively, so both see the keys, and Ctrl+C x2 only acts while in MAP.
+The supervisor reads keyboards directly (raw `input_event`, no `python3-evdev`):
+USB via `/dev/input/by-id/*-event-kbd`, plus any device whose
+`/proc/bus/input/devices` Handlers include `kbd` (Bluetooth/BLE keyboards, which
+have no by-id symlink). Slint/libinput does not grab them exclusively, so both
+the supervisor and the map binary see the keys. **Wake** lives in the map binary
+(it auto-discovers keyboards by `KEY_C` capability, so the USB-mic HID and HDMI
+nodes are skipped) and **terminal** lives in the supervisor — gated by the
+screensaver stage so the two never collide.
+
+Touch is the only thing that wakes the screensaver by default (set
+`MAPLIBRE_INPUT_DEVS` to the touchscreen node); Ctrl+C x2 is the deliberate
+keyboard alternative.
 
 Install (in addition to the binary + `~/mls-libs`):
 

@@ -31,6 +31,11 @@ import time
 BIN = os.path.expanduser("~/maplibre-slint-gl")
 REQUEST_DIR = "/tmp/pi-display"
 REQUEST = os.path.join(REQUEST_DIR, "request")
+# The map publishes its screensaver stage here (0=active, >=1 idle). Ctrl+C x2
+# is context-sensitive: while the screensaver is up the map wakes itself (its
+# own Ctrl+C x2 watcher resets the idle clock), so we must NOT drop to the
+# console; only when the live map is shown does Ctrl+C x2 mean "give me a shell".
+SAVER_STAGE = "/dev/shm/pi-saver-stage"
 
 # linux/input-event-codes.h
 EV_KEY = 0x01
@@ -43,6 +48,15 @@ DOUBLE_WINDOW = 1.5  # Ctrl+C 連続2回とみなす最大間隔 (秒)
 
 def log(*a):
     print("[supervisor]", *a, flush=True)
+
+
+def saver_active():
+    """True while the map's screensaver is up (stage >= 1)."""
+    try:
+        with open(SAVER_STAGE) as f:
+            return int(f.read().strip() or "0") >= 1
+    except (OSError, ValueError):
+        return False
 
 
 def keyboard_event_nodes():
@@ -207,10 +221,16 @@ def main():
                         t = time.time()
                         if t - last_ctrl_c <= DOUBLE_WINDOW:
                             last_ctrl_c = 0.0
-                            log("Ctrl+C x2 -> TERMINAL")
-                            stop_map(child)
-                            child = None
-                            mode = "terminal"
+                            if saver_active():
+                                # Screensaver up: the map's own Ctrl+C x2 watcher
+                                # resets its idle clock and wakes the live map.
+                                # Don't drop to the console here.
+                                log("Ctrl+C x2 -> WAKE (screensaver; map handles)")
+                            else:
+                                log("Ctrl+C x2 -> TERMINAL")
+                                stop_map(child)
+                                child = None
+                                mode = "terminal"
                         else:
                             last_ctrl_c = t
     except KeyboardInterrupt:
