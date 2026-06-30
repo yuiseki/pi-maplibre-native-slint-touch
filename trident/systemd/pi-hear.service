@@ -1,0 +1,30 @@
+[Unit]
+Description=pi-hear (Trident voice: wake word + place -> map flyTo via /dev/shm)
+# Wait for ALSA so the USB mic PCM exists; restart covers a slow enumeration.
+After=multi-user.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+User=yuiseki
+WorkingDirectory=/home/yuiseki/src/pi-hear
+# whisper-cli lives in the whisper.cpp build dir (not on the unit's minimal PATH);
+# pi-say / pi-flyto are called by absolute path already.
+Environment=PATH=/home/yuiseki/src/whisper.cpp/build/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8
+# Mic referenced by CARD name (not index) so a reboot's USB enumeration order
+# can't break it. Empty --whisper-prompt = no initial-prompt biasing (intentional).
+ExecStart=/home/yuiseki/.venv-ahear/bin/python /home/yuiseki/src/pi-hear/pi_hear.py \
+  --engine whisper \
+  --whisper-model /home/yuiseki/src/whisper.cpp/models/ggml-base.bin \
+  --whisper-prompt "" \
+  --alsa-device plughw:CARD=Device,DEV=0 \
+  --samplerate 16000 \
+  --threshold 0.08 \
+  --min-speech 0.5 \
+  --act
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -74,6 +74,16 @@ pi-flyto tokyo
 デモ: 待機(東京)→「オーケートライデント、広島を表示して」→ pi-say確認 → 広島へ flyTo
 →「オーケートライデント、東京を表示して」→ 東京へ flyTo。
 
+### 常駐(systemd, 再起動で自動復帰)
+
+上の手動起動は実験用。常用は `systemd/pi-hear.service`(地図の `maplibre-slint-gl.service` と同様に boot 自動起動・`Restart=always`)。CHANGEEK USB マイクを **index でなく CARD 名**(`plughw:CARD=Device,DEV=0`)で参照し、再起動時の USB 列挙順ズレに耐える。`whisper-cli` は PATH 外なので unit の `Environment=PATH` に build dir を入れてある。
+
+```bash
+sudo install -m644 trident/systemd/pi-hear.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now pi-hear.service
+journalctl -u pi-hear.service -f      # WAKE / flyto / saver-ignored を確認
+```
+
 ## 地図 IPC
 
 - **flyTo**: `echo "34.385 132.455 11" > /dev/shm/pi-map-flyto`(`lat lon [zoom]`)。
