@@ -62,6 +62,14 @@ directory overlays was touched. Following upstream is therefore a porting job,
 not a version bump; `REF=main SYNC=1 hdmi/scripts/build.sh` is where that work
 would start, and it will not build unchanged.
 
+An existing `$WORK/build` is reused rather than re-configured. At this ref
+Slint is fetched from the moving `release/1` branch, so a re-configure makes
+CMake rebase the local Slint checkout onto today's upstream and fail in merge
+conflicts -- which then breaks plain `cmake --build` too, since ninja
+regenerates through the same failing configure. The configure that does run
+passes `FETCHCONTENT_UPDATES_DISCONNECTED=ON` for the same reason. Pass
+`RECONFIGURE=1` when a CMake flag genuinely has to change.
+
 It configures with the OpenGL backend (not WebGPU), Slint's FemtoVG GL renderer,
 and the libseat linuxkms backend:
 

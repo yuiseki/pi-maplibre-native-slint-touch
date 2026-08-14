@@ -53,10 +53,22 @@ cp "$HERE/platform/"*.hpp "$HERE/platform/"*.cpp "$WORK/cpp/platform/"
 mkdir -p "$WORK/cpp/assets"
 cp "$HERE/assets/"* "$WORK/cpp/assets/" 2>/dev/null || true
 
-echo "== configure (OpenGL backend + FemtoVG GL + libseat linuxkms) =="
-cmake -S "$WORK" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release \
-  -DMLN_WITH_OPENGL=ON -DMLN_WITH_WEBGPU=OFF -DMLN_WITH_GLFW=OFF \
-  -DSLINT_FEATURE_RENDERER_FEMTOVG=ON -DSLINT_FEATURE_BACKEND_LINUXKMS=ON
+# Configure only when there is nothing to reuse. Re-configuring an already
+# working tree is not free here: at this pinned ref Slint is fetched from the
+# moving release/1 branch, so CMake's update step tries to rebase the local
+# checkout onto whatever upstream Slint is today and dies in merge conflicts --
+# leaving the tree needing a regeneration that then fails on every build too.
+# FETCHCONTENT_UPDATES_DISCONNECTED stops that update step; RECONFIGURE=1
+# forces the configure when a flag really has to change.
+if [ ! -f "$WORK/build/CMakeCache.txt" ] || [ "${RECONFIGURE:-0}" = "1" ]; then
+  echo "== configure (OpenGL backend + FemtoVG GL + libseat linuxkms) =="
+  cmake -S "$WORK" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release \
+    -DMLN_WITH_OPENGL=ON -DMLN_WITH_WEBGPU=OFF -DMLN_WITH_GLFW=OFF \
+    -DSLINT_FEATURE_RENDERER_FEMTOVG=ON -DSLINT_FEATURE_BACKEND_LINUXKMS=ON \
+    -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+else
+  echo "== reusing existing configuration in $WORK/build =="
+fi
 
 echo "== build maplibre-slint-gl =="
 cmake --build "$WORK/build" --target maplibre-slint-gl -j"$(nproc)"
