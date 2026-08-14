@@ -11,24 +11,38 @@
 #
 # Env overrides:
 #   WORK    maplibre-native-slint checkout dir (default: ~/poc/mln-slint-cpp)
-#   BRANCH  branch to build (default: cpp-zero-copy-gl-example; use main once
-#           PR #68 is merged)
+#   REF     upstream ref to build against (default: the PR #68 merge commit)
 #   REPO    upstream URL
+#   SYNC    1 to move an existing checkout onto REF (default: leave it alone)
 set -eu
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"            # the hdmi/ dir
 WORK="${WORK:-$HOME/poc/mln-slint-cpp}"
-BRANCH="${BRANCH:-cpp-zero-copy-gl-example}"
+# The app was upstreamed as PR #68 and its branch was then deleted, so there is
+# no branch to track. Upstream has since refactored the backend into a reusable
+# mbgl-slint library (#73), which these sources do not yet follow -- so the ref
+# is pinned to the merge commit rather than to main. Moving to a newer upstream
+# is a porting job, not a build fix.
+REF="${REF:-1f32a5a}"
 REPO="${REPO:-https://github.com/maplibre/maplibre-native-slint}"
+SYNC="${SYNC:-0}"
 
 if [ ! -d "$WORK/.git" ]; then
   echo "== cloning $REPO -> $WORK =="
   git clone --recurse-submodules "$REPO" "$WORK"
+  git -C "$WORK" checkout "$REF"
+  git -C "$WORK" submodule update --init --recursive
+elif [ "$SYNC" = "1" ]; then
+  echo "== moving $WORK onto $REF =="
+  git -C "$WORK" fetch origin
+  git -C "$WORK" checkout "$REF"
+  git -C "$WORK" submodule update --init --recursive
+else
+  # An existing checkout is left exactly as it is: it carries the overlaid
+  # sources as modifications by design, and a stray checkout/fetch here has
+  # already cost one debugging session. Pass SYNC=1 to move it deliberately.
+  echo "== using existing checkout: $(git -C "$WORK" rev-parse --short HEAD) =="
 fi
-echo "== checkout $BRANCH =="
-git -C "$WORK" fetch origin "$BRANCH"
-git -C "$WORK" checkout "$BRANCH"
-git -C "$WORK" submodule update --init --recursive
 
 echo "== overlay app sources from $HERE onto $WORK/cpp =="
 cp "$HERE/main_gl.cpp" "$HERE/gl_map_window.slint" "$WORK/cpp/"

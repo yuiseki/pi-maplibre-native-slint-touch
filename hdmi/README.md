@@ -50,6 +50,18 @@ hdmi/scripts/build.sh          # clones maplibre-native-slint, overlays these
                                # sources onto cpp/, builds maplibre-slint-gl
 ```
 
+The app was upstreamed as PR #68 and the branch it lived on was deleted, so
+there is no branch to track: `build.sh` pins `REF` to the merge commit
+(`1f32a5a`). An existing checkout is used as-is -- it carries the overlaid
+sources as local modifications by design -- and only moved onto `REF` when
+`SYNC=1` is passed.
+
+Upstream has moved on since: #73 extracted the backend into a reusable
+`mbgl-slint` library, and #70/#72/#75/#76 reworked the build. Every file this
+directory overlays was touched. Following upstream is therefore a porting job,
+not a version bump; `REF=main SYNC=1 hdmi/scripts/build.sh` is where that work
+would start, and it will not build unchanged.
+
 It configures with the OpenGL backend (not WebGPU), Slint's FemtoVG GL renderer,
 and the libseat linuxkms backend:
 
