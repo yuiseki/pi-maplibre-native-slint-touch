@@ -138,7 +138,9 @@ private:
     mbgl::Point<double> last_pos{};
     double min_zoom_ = 0.0;
     double max_zoom_ = 22.0;
-    int frame_count_ = 0;
+    // 64-bit: at 60fps an int wraps in about 14 months, and signed
+    // overflow is undefined -- this appliance is expected to just keep running.
+    uint64_t frame_count_ = 0;
     // flyTo duration; override with MAPLIBRE_FLY_MS. Deliberately long: V3D
     // renders the full map every frame, and a fast flyTo outruns tile loading
     // so almost nothing draws mid-flight. 6 s lets tiles keep up and stay smooth.

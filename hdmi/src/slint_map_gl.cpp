@@ -337,7 +337,13 @@ void SlintMapGL::render() {
         fps_last_ = now;
     }
 
-    if ((frame_count_++ % 300) == 0) {
+    // Liveness heartbeat -- not the frame-rate instrumentation, which is the
+    // MAPLIBRE_PERF block above. Every 300 frames is ~5s at 60fps, which was
+    // 25k journal lines a day (a third of this host's whole journal) to say
+    // "still rendering". Once every 18000 frames (~5 min) says the same thing;
+    // the fast cadence stays available while measuring.
+    const uint64_t heartbeat_every = perf_log_ ? 300 : 18000;
+    if ((frame_count_++ % heartbeat_every) == 0) {
         std::cout << "[SlintMapGL] render frame=" << frame_count_
                   << " style_loaded=" << style_loaded.load() << std::endl;
     }
