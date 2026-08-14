@@ -103,6 +103,11 @@ public:
         std::string name;
         double lat = 0.0;
         double lon = 0.0;
+        // A position is worth showing long after it was measured -- indoors the
+        // GPS never fixes and a node may not have been heard for hours -- but it
+        // must not read as current, so stale ones are drawn faded.
+        bool stale = false;
+        bool self = false;   // this host's own position, drawn in its own colour
     };
     void set_mesh_nodes(std::vector<MeshNode> nodes);
 

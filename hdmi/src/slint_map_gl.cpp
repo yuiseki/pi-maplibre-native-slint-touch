@@ -117,8 +117,32 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
 }
 
 namespace {
-constexpr const char* kMeshSourceId = "pi-mesh-nodes";
-constexpr const char* kMeshLayerId = "pi-mesh-nodes-circles";
+// One source+layer pair per (who, freshness) bucket. Circle paint properties
+// are per-layer, so buckets are how a faded marker is expressed without
+// data-driven style expressions.
+struct MarkerBucket {
+    const char* source_id;
+    const char* layer_id;
+    mbgl::Color color;
+    float opacity;
+};
+const MarkerBucket kBuckets[] = {
+    {"pi-mesh-nodes-stale", "pi-mesh-nodes-stale-circles",
+     mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 0.30f},
+    {"pi-mesh-nodes", "pi-mesh-nodes-circles",
+     mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 1.0f},
+    {"pi-self-stale", "pi-self-stale-circles",
+     mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 0.30f},
+    {"pi-self", "pi-self-circles",
+     mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 1.0f},
+};
+constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
+
+// Bucket order: node-stale, node-fresh, self-stale, self-fresh. Later buckets
+// are added later, so the live own position ends up on top.
+size_t bucket_of(const SlintMapGL::MeshNode& n) {
+    return (n.self ? 2u : 0u) + (n.stale ? 0u : 1u);
+}
 }  // namespace
 
 void SlintMapGL::set_mesh_nodes(std::vector<MeshNode> nodes) {
@@ -134,34 +158,42 @@ void SlintMapGL::apply_mesh_nodes() {
         return;
     auto& style = map->getStyle();
 
-    mbgl::FeatureCollection features;
-    features.reserve(mesh_nodes_.size());
+    mbgl::FeatureCollection buckets[kBucketCount];
     for (const auto& n : mesh_nodes_) {
         mapbox::geojson::feature f{mapbox::geometry::point<double>{n.lon, n.lat}};
         f.properties["id"] = n.id;
         f.properties["name"] = n.name;
-        features.push_back(std::move(f));
+        buckets[bucket_of(n)].push_back(std::move(f));
     }
 
-    auto* existing = style.getSource(kMeshSourceId);
-    if (!existing) {
-        auto source = std::make_unique<mbgl::style::GeoJSONSource>(kMeshSourceId);
-        source->setGeoJSON(mbgl::GeoJSON{features});
-        style.addSource(std::move(source));
+    for (size_t i = 0; i < kBucketCount; ++i) {
+        const auto& b = kBuckets[i];
+        auto* existing = style.getSource(b.source_id);
+        if (!existing) {
+            auto source = std::make_unique<mbgl::style::GeoJSONSource>(b.source_id);
+            source->setGeoJSON(mbgl::GeoJSON{buckets[i]});
+            style.addSource(std::move(source));
 
-        auto layer = std::make_unique<mbgl::style::CircleLayer>(kMeshLayerId,
-                                                               kMeshSourceId);
-        layer->setCircleRadius(7.0f);
-        layer->setCircleColor(mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f});   // red dot
-        layer->setCircleStrokeWidth(2.0f);
-        layer->setCircleStrokeColor(mbgl::Color::white());
-        style.addLayer(std::move(layer));                  // on top of everything
-        std::cout << "[SlintMapGL] mesh marker layer created" << std::endl;
-    } else {
-        static_cast<mbgl::style::GeoJSONSource*>(existing)
-            ->setGeoJSON(mbgl::GeoJSON{features});
+            auto layer = std::make_unique<mbgl::style::CircleLayer>(b.layer_id,
+                                                                   b.source_id);
+            layer->setCircleRadius(7.0f);
+            layer->setCircleColor(b.color);
+            layer->setCircleOpacity(b.opacity);
+            layer->setCircleStrokeWidth(2.0f);
+            layer->setCircleStrokeColor(mbgl::Color::white());
+            layer->setCircleStrokeOpacity(b.opacity);
+            style.addLayer(std::move(layer));          // on top of everything
+            std::cout << "[SlintMapGL] marker layer created: " << b.layer_id
+                      << std::endl;
+        } else {
+            static_cast<mbgl::style::GeoJSONSource*>(existing)
+                ->setGeoJSON(mbgl::GeoJSON{buckets[i]});
+        }
     }
-    std::cout << "[SlintMapGL] mesh markers: " << mesh_nodes_.size() << std::endl;
+    std::cout << "[SlintMapGL] markers: " << mesh_nodes_.size() << " ("
+              << buckets[1].size() << " node, " << buckets[0].size()
+              << " node-stale, " << buckets[3].size() << " self, "
+              << buckets[2].size() << " self-stale)" << std::endl;
 }
 
 void SlintMapGL::render() {

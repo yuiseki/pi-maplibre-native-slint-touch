@@ -152,6 +152,13 @@ static int64_t now_ms() {
         .count();
 }
 
+// The two marker feeds are concatenated into one string so a single compare
+// tells us whether anything changed; this pulls the self part back out.
+static std::string self_raw_of(const std::string& blob) {
+    const auto at = blob.find("\n#self ");
+    return at == std::string::npos ? std::string() : blob.substr(at + 7);
+}
+
 // True while a FRESH /dev/shm/pi-map-pause (<15s, wall-clock vs file mtime)
 // exists. pi-hear touches it during ASR so the recogniser gets the full CPU.
 // We honour it by NOT re-arming the render loop (V3D discards a *skipped* FBO
@@ -561,12 +568,24 @@ int main(int /*argc*/, char** /*argv*/) {
             ? std::getenv("MAPLIBRE_GPS_FILE")
             : std::string("/dev/shm/pi-gps");
     // Meshtastic node positions, published by pi-meshtastic.service as
-    // "<id> <lat> <lon> <shortName>" per line (empty file = radio has nothing
+    // "<id> <lat> <lon> <epoch> <shortName>" per line (empty file = nothing
     // positioned). Plotted as markers; the map knows nothing about the radio.
     const std::string mesh_nodes_path =
         std::getenv("MAPLIBRE_MESH_NODES_FILE")
             ? std::getenv("MAPLIBRE_MESH_NODES_FILE")
             : std::string("/dev/shm/pi-mesh-nodes");
+    // This host's own last GPS fix, "<lat> <lon> <epoch>", published by
+    // pi-gps-track. /dev/shm/pi-gps alone cannot serve: it keeps republishing
+    // the last known position with fix=0, with no record of when the fix was.
+    const std::string self_fix_path =
+        std::getenv("MAPLIBRE_SELF_FIX_FILE")
+            ? std::getenv("MAPLIBRE_SELF_FIX_FILE")
+            : std::string("/dev/shm/pi-gps-lastfix");
+    // A position older than this is drawn faded: still useful, clearly not now.
+    const int64_t marker_stale_secs =
+        std::getenv("MAPLIBRE_MARKER_STALE_SECS")
+            ? std::atoll(std::getenv("MAPLIBRE_MARKER_STALE_SECS"))
+            : 600;
     auto mesh_seen = std::make_shared<std::string>();   // last raw contents
     win->on_sync_toggled([=](bool on) {
         sync_on->store(on);
@@ -1023,22 +1042,53 @@ int main(int /*argc*/, char** /*argv*/) {
                 // contents actually change, so a still mesh costs one stat +
                 // one small read per tick and never touches the style.
                 {
+                    // Both feeds are "last known position" files: they are not
+                    // required to be fresh, the line's own epoch says how old
+                    // the position is. Re-read only when the bytes change.
                     std::string raw;
-                    if (fresh_ms(mesh_nodes_path, 5 * 60 * 1000)) {
+                    {
                         std::ifstream f(mesh_nodes_path);
                         std::stringstream ss;
                         ss << f.rdbuf();
                         raw = ss.str();
                     }
-                    if (raw != *mesh_seen) {
+                    {
+                        std::ifstream f(self_fix_path);
+                        std::stringstream ss;
+                        ss << f.rdbuf();
+                        raw += "\n#self " + ss.str();
+                    }
+                    const int64_t now_s = rt / 1000;
+                    // Age changes even when the files do not, so recompute
+                    // periodically as well; the marker must fade on its own.
+                    const bool age_tick = (now_s % 60) == 0;
+                    if (raw != *mesh_seen || age_tick) {
                         *mesh_seen = raw;
                         std::vector<SlintMapGL::MeshNode> nodes;
-                        std::istringstream ls(raw);
-                        std::string id, name;
-                        double lat = 0.0, lon = 0.0;
-                        while (ls >> id >> lat >> lon >> name) {
-                            nodes.push_back({id, name, lat, lon});
+
+                        std::istringstream ls(raw.substr(0, raw.find("\n#self ")));
+                        std::string line;
+                        while (std::getline(ls, line)) {
+                            std::istringstream ts(line);
+                            std::string id, name;
+                            double lat = 0.0, lon = 0.0;
+                            int64_t epoch = 0;
+                            if (!(ts >> id >> lat >> lon >> epoch >> name))
+                                continue;
+                            nodes.push_back({id, name, lat, lon,
+                                             (now_s - epoch) > marker_stale_secs,
+                                             false});
                         }
+
+                        std::istringstream sf(self_raw_of(raw));
+                        double slat = 0.0, slon = 0.0;
+                        int64_t sepoch = 0;
+                        if (sf >> slat >> slon >> sepoch) {
+                            nodes.push_back({"self", "self", slat, slon,
+                                             (now_s - sepoch) > marker_stale_secs,
+                                             true});
+                        }
+
                         smap->set_mesh_nodes(std::move(nodes));
                         win->window().request_redraw();
                     }
