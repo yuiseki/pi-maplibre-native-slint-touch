@@ -586,6 +586,16 @@ int main(int /*argc*/, char** /*argv*/) {
         std::getenv("MAPLIBRE_MARKER_STALE_SECS")
             ? std::atoll(std::getenv("MAPLIBRE_MARKER_STALE_SECS"))
             : 600;
+    // Own marker's label: this host, so it reads as a place on the map rather
+    // than as "self". MAPLIBRE_SELF_LABEL overrides.
+    std::string self_label = "here";
+    if (const char* e = std::getenv("MAPLIBRE_SELF_LABEL")) {
+        self_label = e;
+    } else {
+        char hn[128] = {0};
+        if (::gethostname(hn, sizeof(hn) - 1) == 0 && hn[0])
+            self_label = hn;
+    }
     auto mesh_seen = std::make_shared<std::string>();   // last raw contents
     auto mesh_minute = std::make_shared<int64_t>(-1);   // last age recompute
     win->on_sync_toggled([=](bool on) {
@@ -1090,7 +1100,7 @@ int main(int /*argc*/, char** /*argv*/) {
                         double slat = 0.0, slon = 0.0;
                         int64_t sepoch = 0;
                         if (sf >> slat >> slon >> sepoch) {
-                            nodes.push_back({"self", "self", slat, slon,
+                            nodes.push_back({"self", self_label, slat, slon,
                                              (now_s - sepoch) > marker_stale_secs,
                                              true});
                         }

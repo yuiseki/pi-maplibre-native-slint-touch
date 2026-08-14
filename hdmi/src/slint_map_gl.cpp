@@ -10,7 +10,10 @@
 #include <mbgl/map/map_options.hpp>
 #include <mbgl/renderer/renderer.hpp>
 #include <mbgl/storage/resource_options.hpp>
+#include <mbgl/style/expression/dsl.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
+#include <mbgl/style/layers/symbol_layer.hpp>
+#include <mbgl/style/property_expression.hpp>
 #include <mbgl/style/sources/geojson_source.hpp>
 #include <mbgl/style/style.hpp>
 #include <mbgl/util/color.hpp>
@@ -123,18 +126,19 @@ namespace {
 struct MarkerBucket {
     const char* source_id;
     const char* layer_id;
+    const char* label_layer_id;
     mbgl::Color color;
     float opacity;
 };
 const MarkerBucket kBuckets[] = {
     {"pi-mesh-nodes-stale", "pi-mesh-nodes-stale-circles",
-     mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 0.30f},
+     "pi-mesh-nodes-stale-labels", mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 0.30f},
     {"pi-mesh-nodes", "pi-mesh-nodes-circles",
-     mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 1.0f},
+     "pi-mesh-nodes-labels", mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 1.0f},
     {"pi-self-stale", "pi-self-stale-circles",
-     mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 0.30f},
+     "pi-self-stale-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 0.30f},
     {"pi-self", "pi-self-circles",
-     mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 1.0f},
+     "pi-self-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 1.0f},
 };
 constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
 
@@ -183,8 +187,32 @@ void SlintMapGL::apply_mesh_nodes() {
             layer->setCircleStrokeColor(mbgl::Color::white());
             layer->setCircleStrokeOpacity(b.opacity);
             style.addLayer(std::move(layer));          // on top of everything
+
+            // Label above the dot. text-field reads the feature's "name", so
+            // one layer covers every marker in the bucket. The halo keeps it
+            // readable over both land and water; allow-overlap because a
+            // handful of markers must never hide each other.
+            namespace dsl = mbgl::style::expression::dsl;
+            auto labels = std::make_unique<mbgl::style::SymbolLayer>(
+                b.label_layer_id, b.source_id);
+            labels->setTextField(
+                mbgl::style::PropertyValue<mbgl::style::expression::Formatted>(
+                    mbgl::style::PropertyExpression<
+                        mbgl::style::expression::Formatted>(
+                        dsl::format(dsl::get("name")))));
+            labels->setTextFont({std::vector<std::string>{"Noto Sans Bold"}});
+            labels->setTextSize(13.0f);
+            labels->setTextAnchor(mbgl::style::SymbolAnchorType::Bottom);
+            labels->setTextOffset(std::array<float, 2>{{0.0f, -0.9f}});
+            labels->setTextAllowOverlap(true);
+            labels->setTextIgnorePlacement(true);
+            labels->setTextColor(b.color);
+            labels->setTextOpacity(b.opacity);
+            labels->setTextHaloColor(mbgl::Color::white());
+            labels->setTextHaloWidth(1.5f);
+            style.addLayer(std::move(labels));
             std::cout << "[SlintMapGL] marker layer created: " << b.layer_id
-                      << std::endl;
+                      << " (+labels)" << std::endl;
         } else {
             static_cast<mbgl::style::GeoJSONSource*>(existing)
                 ->setGeoJSON(mbgl::GeoJSON{buckets[i]});
