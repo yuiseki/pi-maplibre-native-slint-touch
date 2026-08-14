@@ -10,7 +10,11 @@
 #include <mbgl/map/map_options.hpp>
 #include <mbgl/renderer/renderer.hpp>
 #include <mbgl/storage/resource_options.hpp>
+#include <mbgl/style/layers/circle_layer.hpp>
+#include <mbgl/style/sources/geojson_source.hpp>
 #include <mbgl/style/style.hpp>
+#include <mbgl/util/color.hpp>
+#include <mbgl/util/geojson.hpp>
 #include <mbgl/util/chrono.hpp>
 #include <mbgl/util/geo.hpp>
 
@@ -112,7 +116,59 @@ void SlintMapGL::setup(uint32_t fbo, int w, int h,
                     .withZoom(czoom));
 }
 
+namespace {
+constexpr const char* kMeshSourceId = "pi-mesh-nodes";
+constexpr const char* kMeshLayerId = "pi-mesh-nodes-circles";
+}  // namespace
+
+void SlintMapGL::set_mesh_nodes(std::vector<MeshNode> nodes) {
+    mesh_nodes_ = std::move(nodes);
+    mesh_dirty_ = true;
+}
+
+// Push the current node list into the style as a GeoJSON source + circle layer,
+// creating them if the style does not have them yet. Switching styles throws
+// them away, which is why onDidFinishLoadingStyle() re-arms mesh_dirty_.
+void SlintMapGL::apply_mesh_nodes() {
+    if (!map || !style_loaded)
+        return;
+    auto& style = map->getStyle();
+
+    mbgl::FeatureCollection features;
+    features.reserve(mesh_nodes_.size());
+    for (const auto& n : mesh_nodes_) {
+        mapbox::geojson::feature f{mapbox::geometry::point<double>{n.lon, n.lat}};
+        f.properties["id"] = n.id;
+        f.properties["name"] = n.name;
+        features.push_back(std::move(f));
+    }
+
+    auto* existing = style.getSource(kMeshSourceId);
+    if (!existing) {
+        auto source = std::make_unique<mbgl::style::GeoJSONSource>(kMeshSourceId);
+        source->setGeoJSON(mbgl::GeoJSON{features});
+        style.addSource(std::move(source));
+
+        auto layer = std::make_unique<mbgl::style::CircleLayer>(kMeshLayerId,
+                                                               kMeshSourceId);
+        layer->setCircleRadius(7.0f);
+        layer->setCircleColor(mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f});   // red dot
+        layer->setCircleStrokeWidth(2.0f);
+        layer->setCircleStrokeColor(mbgl::Color::white());
+        style.addLayer(std::move(layer));                  // on top of everything
+        std::cout << "[SlintMapGL] mesh marker layer created" << std::endl;
+    } else {
+        static_cast<mbgl::style::GeoJSONSource*>(existing)
+            ->setGeoJSON(mbgl::GeoJSON{features});
+    }
+    std::cout << "[SlintMapGL] mesh markers: " << mesh_nodes_.size() << std::endl;
+}
+
 void SlintMapGL::render() {
+    if (mesh_dirty_ && style_loaded) {
+        apply_mesh_nodes();
+        mesh_dirty_ = false;
+    }
     using msd = std::chrono::duration<double, std::milli>;
     const auto f0 = std::chrono::steady_clock::now();
 
@@ -407,6 +463,8 @@ void SlintMapGL::onWillStartLoadingMap() {
 void SlintMapGL::onDidFinishLoadingStyle() {
     std::cout << "[MapObserver] Did finish loading style" << std::endl;
     style_loaded = true;
+    // A new style has no idea about our source/layer; put them back.
+    mesh_dirty_ = true;
 }
 
 void SlintMapGL::onDidBecomeIdle() {

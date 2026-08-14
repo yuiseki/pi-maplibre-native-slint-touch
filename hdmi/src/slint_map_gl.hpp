@@ -10,6 +10,7 @@
 #include <mbgl/util/run_loop.hpp>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "slint_gl_backend.hpp"
 
@@ -94,6 +95,17 @@ public:
     // location; when off, reset pitch/bearing to 0 (keeping center + zoom).
     void set_dance(bool on);
 
+    // Meshtastic nodes to draw as markers. Fed from /dev/shm/pi-mesh-nodes
+    // (published by pi-meshtastic.service); the map owns nothing about the
+    // radio, it just plots whatever positions it is handed.
+    struct MeshNode {
+        std::string id;
+        std::string name;
+        double lat = 0.0;
+        double lon = 0.0;
+    };
+    void set_mesh_nodes(std::vector<MeshNode> nodes);
+
     // MapObserver overrides
     void onWillStartLoadingMap() override;
     void onDidFinishLoadingStyle() override;
@@ -133,6 +145,12 @@ private:
     bool demo_orientation_ = false;
     double dance_speed_ = 0.5;  // sweep-rate factor; MAPLIBRE_DANCE_SPEED
     double dance_max_pitch_ = 45.0;  // peak dance pitch (deg); MAPLIBRE_DANCE_MAX_PITCH
+
+    // Mesh markers. apply_mesh_nodes() runs on the map thread (from render()),
+    // because the style must not be touched from the timer that feeds us.
+    std::vector<MeshNode> mesh_nodes_;
+    bool mesh_dirty_ = false;
+    void apply_mesh_nodes();
     std::chrono::steady_clock::time_point demo_start_{};
     std::chrono::steady_clock::time_point fps_last_{};
     int fps_frames_ = 0;

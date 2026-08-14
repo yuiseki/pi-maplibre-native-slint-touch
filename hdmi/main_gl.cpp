@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <fstream>
+#include <sstream>
 #include <mbgl/util/image.hpp>
 
 #include "gl_map_window.h"
@@ -559,6 +560,14 @@ int main(int /*argc*/, char** /*argv*/) {
         std::getenv("MAPLIBRE_GPS_FILE")
             ? std::getenv("MAPLIBRE_GPS_FILE")
             : std::string("/dev/shm/pi-gps");
+    // Meshtastic node positions, published by pi-meshtastic.service as
+    // "<id> <lat> <lon> <shortName>" per line (empty file = radio has nothing
+    // positioned). Plotted as markers; the map knows nothing about the radio.
+    const std::string mesh_nodes_path =
+        std::getenv("MAPLIBRE_MESH_NODES_FILE")
+            ? std::getenv("MAPLIBRE_MESH_NODES_FILE")
+            : std::string("/dev/shm/pi-mesh-nodes");
+    auto mesh_seen = std::make_shared<std::string>();   // last raw contents
     win->on_sync_toggled([=](bool on) {
         sync_on->store(on);
         if (!on) {
@@ -971,13 +980,17 @@ int main(int /*argc*/, char** /*argv*/) {
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch())
                         .count();
-                auto fresh_ms = [rt](const std::string& path) -> bool {
+                // max_age defaults to the 2s the sensor feeds are written at;
+                // slower publishers (the mesh node list is a 30s snapshot) pass
+                // their own budget.
+                auto fresh_ms = [rt](const std::string& path,
+                                     int64_t max_age = 2000) -> bool {
                     struct stat st {};
                     if (::stat(path.c_str(), &st) != 0)
                         return false;
                     int64_t m = (int64_t)st.st_mtim.tv_sec * 1000 +
                                 st.st_mtim.tv_nsec / 1000000;
-                    return (rt - m) < 2000;
+                    return (rt - m) < max_age;
                 };
 
                 double op = 0.0, ob = 0.0;
@@ -1005,6 +1018,31 @@ int main(int /*argc*/, char** /*argv*/) {
                 win->set_gps_state(gstate);
                 win->set_gps_sats(ginview);
                 win->set_gps_icon((*sat_icons)[gstate]);
+
+                // Meshtastic node markers. Re-read only when the file's
+                // contents actually change, so a still mesh costs one stat +
+                // one small read per tick and never touches the style.
+                {
+                    std::string raw;
+                    if (fresh_ms(mesh_nodes_path, 5 * 60 * 1000)) {
+                        std::ifstream f(mesh_nodes_path);
+                        std::stringstream ss;
+                        ss << f.rdbuf();
+                        raw = ss.str();
+                    }
+                    if (raw != *mesh_seen) {
+                        *mesh_seen = raw;
+                        std::vector<SlintMapGL::MeshNode> nodes;
+                        std::istringstream ls(raw);
+                        std::string id, name;
+                        double lat = 0.0, lon = 0.0;
+                        while (ls >> id >> lat >> lon >> name) {
+                            nodes.push_back({id, name, lat, lon});
+                        }
+                        smap->set_mesh_nodes(std::move(nodes));
+                        win->window().request_redraw();
+                    }
+                }
 
                 // Status-bar Wi-Fi indicator (polled in thread (c2) above).
                 const int nstate = net_state->load();
