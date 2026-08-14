@@ -587,6 +587,7 @@ int main(int /*argc*/, char** /*argv*/) {
             ? std::atoll(std::getenv("MAPLIBRE_MARKER_STALE_SECS"))
             : 600;
     auto mesh_seen = std::make_shared<std::string>();   // last raw contents
+    auto mesh_minute = std::make_shared<int64_t>(-1);   // last age recompute
     win->on_sync_toggled([=](bool on) {
         sync_on->store(on);
         if (!on) {
@@ -1060,9 +1061,14 @@ int main(int /*argc*/, char** /*argv*/) {
                     }
                     const int64_t now_s = rt / 1000;
                     // Age changes even when the files do not, so recompute
-                    // periodically as well; the marker must fade on its own.
-                    const bool age_tick = (now_s % 60) == 0;
+                    // once a minute as well; the marker must fade on its own.
+                    // Tracking the minute (rather than testing now_s % 60)
+                    // keeps the stage timer from redoing this on every tick
+                    // within that second.
+                    const int64_t minute = now_s / 60;
+                    const bool age_tick = minute != *mesh_minute;
                     if (raw != *mesh_seen || age_tick) {
+                        *mesh_minute = minute;
                         *mesh_seen = raw;
                         std::vector<SlintMapGL::MeshNode> nodes;
 
