@@ -1,0 +1,129 @@
+#!/bin/bash
+# pi-net: Wi-Fi status / manual reconnect / timed disconnect (NetworkManager)
+#   pi-net              show current connection status
+#   pi-net reconnect    rescan and try known APs in priority order
+#   pi-net disconnect [SECONDS]
+#                       go off-grid, then come back on its own (default 120s)
+#   pi-net disconnect --stay
+#                       ...and do not come back. Only sensible with a keyboard
+#                       attached, because reconnecting then needs one.
+set -u
+
+SUDO=""
+[ "$(id -u)" != "0" ] && SUDO="sudo -n"
+
+WIFI_DEV=$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="wifi"{print $1; exit}')
+
+known_profiles() {
+    # tab-separated: name ssid autoconnect priority, sorted by priority desc
+    nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="802-11-wireless"{print $1}' \
+    | while IFS= read -r c; do
+        printf '%s\t%s\t%s\t%s\n' "$c" \
+            "$(nmcli -g 802-11-wireless.ssid connection show "$c")" \
+            "$(nmcli -g connection.autoconnect connection show "$c")" \
+            "$(nmcli -g connection.autoconnect-priority connection show "$c")"
+    done | sort -t "$(printf '\t')" -k4,4rn
+}
+
+status() {
+    nmcli -f DEVICE,TYPE,STATE,CONNECTION device status | grep -v -e ^lo -e " p2p-dev-"
+    echo
+    if [ -z "$WIFI_DEV" ]; then
+        echo "wifi device: none"
+        return 1
+    fi
+    local line ip4 gw
+    line=$(nmcli -t -f ACTIVE,SSID,SIGNAL,CHAN device wifi list ifname "$WIFI_DEV" --rescan no 2>/dev/null | awk -F: '$1=="yes"')
+    if [ -n "$line" ]; then
+        echo "$line" | awk -F: '{printf "wifi: connected SSID=%s signal=%s%% ch=%s\n", $2, $3, $4}'
+    else
+        echo "wifi: not connected"
+    fi
+    ip4=$(nmcli -g IP4.ADDRESS device show "$WIFI_DEV" 2>/dev/null | head -1)
+    gw=$(nmcli -g IP4.GATEWAY device show "$WIFI_DEV" 2>/dev/null | head -1)
+    echo "ip: ${ip4:-none}  gw: ${gw:-none}"
+    if [ -n "$gw" ]; then
+        if ping -c1 -W2 "$gw" >/dev/null 2>&1; then
+            echo "gw ping: OK"
+        else
+            echo "gw ping: NG"
+        fi
+    fi
+    echo
+    echo "known profiles (autoconnect priority order):"
+    known_profiles | awk -F'\t' '{printf "  %-24s ssid=%-16s autoconnect=%-3s priority=%s\n", $1, $2, $3, $4}'
+}
+
+reconnect() {
+    if [ -z "$WIFI_DEV" ]; then
+        echo "no wifi device" >&2
+        exit 1
+    fi
+    echo "rescanning on $WIFI_DEV ..."
+    $SUDO nmcli device wifi rescan ifname "$WIFI_DEV" 2>/dev/null
+    sleep 4
+    local visible
+    visible=$(nmcli -t -f SSID device wifi list ifname "$WIFI_DEV" --rescan no 2>/dev/null | grep -v '^$' | sort -u)
+    if [ -z "$visible" ]; then
+        echo "no APs visible" >&2
+        exit 1
+    fi
+    echo "visible SSIDs:"
+    echo "$visible" | sed 's/^/  /'
+    while IFS=$'\t' read -r name ssid auto prio; do
+        if echo "$visible" | grep -qxF "$ssid"; then
+            echo "trying: $name (ssid=$ssid priority=$prio)"
+            if $SUDO nmcli connection up "$name" ifname "$WIFI_DEV" >/dev/null 2>&1; then
+                echo "connected: $ssid"
+                status
+                exit 0
+            fi
+            echo "  failed, next"
+        fi
+    done < <(known_profiles)
+    echo "no known AP reachable" >&2
+    exit 1
+}
+
+disconnect() {
+    if [ -z "$WIFI_DEV" ]; then
+        echo "no wifi device" >&2
+        exit 1
+    fi
+    local secs="${1:-120}" stay=""
+    if [ "$secs" = "--stay" ]; then
+        stay=1
+    elif ! echo "$secs" | grep -qE '^[0-9]+$'; then
+        echo "usage: pi-net disconnect [SECONDS|--stay]" >&2
+        exit 2
+    fi
+
+    # Schedule the return BEFORE going down. Anything that can strand a
+    # headless device off the network has to arrange its own way back first:
+    # if this script dies at the wrong moment, the timer still fires.
+    if [ -z "$stay" ]; then
+        $SUDO systemd-run --on-active="$secs" --unit=pi-net-reconnect \
+            --description="pi-net: come back on the air" \
+            /usr/local/bin/pi-net reconnect >/dev/null 2>&1 \
+            || { echo "could not schedule the reconnect; refusing to disconnect" >&2; exit 1; }
+        echo "reconnect scheduled in ${secs}s (systemd unit pi-net-reconnect)"
+    else
+        echo "NOT scheduling a reconnect (--stay)"
+    fi
+
+    echo "disconnecting $WIFI_DEV ..."
+    $SUDO nmcli device disconnect "$WIFI_DEV" >/dev/null 2>&1
+    sleep 1
+    status
+}
+
+case "${1:-status}" in
+    status) status ;;
+    reconnect)
+        # Cancel a pending timer: a manual reconnect means we are back, and a
+        # timer firing later would re-run this for nothing.
+        $SUDO systemctl stop pi-net-reconnect.timer >/dev/null 2>&1 || true
+        reconnect ;;
+    disconnect) shift; disconnect "$@" ;;
+    *) echo "usage: pi-net [status|reconnect|disconnect [SECONDS|--stay]]" >&2; exit 2 ;;
+esac

@@ -18,8 +18,11 @@ Environment=SLINT_BACKEND=linuxkms
 # Build-host libs the display host lacks (libslint_cpp, libcpr, libicu*.72,
 # libpng16). Populate ~/mls-libs once (see README).
 Environment=LD_LIBRARY_PATH=/home/yuiseki/mls-libs
-# Initial style; also appears in the dropdown.
-Environment=MAPLIBRE_STYLE_URL=https://yuiseki.dev/static/styles/osm-bright.json
+# No MAPLIBRE_STYLE_URL here on purpose. The style list comes from
+# ~/.config/maplibre-slint-gl/styles.csv and its first entry is what loads at
+# startup; setting the variable in the unit would override that permanently,
+# which is the opposite of what a per-run override is for. Set it on the
+# command line for a one-off.
 # Optional:
 #   MAPLIBRE_WIDTH / MAPLIBRE_HEIGHT  render size (default: the display resolution)
 #   MAPLIBRE_FLY_MS                   flyTo duration for the city buttons (default 2500)

@@ -48,6 +48,24 @@ echo "== overlay app sources from $HERE onto $WORK/cpp =="
 cp "$HERE/main_gl.cpp" "$HERE/gl_map_window.slint" "$WORK/cpp/"
 cp "$HERE/src/"*.hpp "$HERE/src/"*.cpp "$WORK/cpp/src/"
 cp "$HERE/platform/"*.hpp "$HERE/platform/"*.cpp "$WORK/cpp/platform/"
+
+# ...and the target definition that lists them. Overlaying sources without it
+# means a new file is copied but never compiled, and the failure arrives as an
+# undefined reference at link time rather than anywhere near the cause.
+# The upstream file ends with this target, so replace from its banner to EOF.
+CM="$WORK/cpp/CMakeLists.txt"
+MARK="# --- Zero-copy OpenGL example (maplibre-slint-gl) ---"
+if grep -qF "$MARK" "$CM"; then
+  awk -v mark="$MARK" 'index($0, mark) {exit} {print}' "$CM" > "$CM.tmp"
+  # Keep only the target definition from our copy (its header is commentary
+  # about not being a standalone project, which does not apply once inlined).
+  awk '/^if\(MLN_WITH_OPENGL/{s=1} s' "$HERE/CMakeLists.txt" \
+      | sed "1i $MARK" >> "$CM.tmp"
+  mv "$CM.tmp" "$CM"
+  echo "== overlaid the maplibre-slint-gl target definition =="
+else
+  echo "WARN: could not find the target banner in $CM; not overlaying it" >&2
+fi
 # Screensaver assets (@image-url paths in gl_map_window.slint resolve relative
 # to the .slint file, i.e. cpp/assets/).
 mkdir -p "$WORK/cpp/assets"
