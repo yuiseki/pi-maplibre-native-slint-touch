@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""pi-poi: put what is around a place onto the map.
+
+    pi-poi cafe                     -> around wherever the map is now
+    pi-poi cafe hiroshima           -> around a named place
+    pi-poi cafe 34.39 132.45        -> around a coordinate
+    pi-poi clear                    -> take them off again
+
+This is the thing behind "show cafes on map". It asks the Overpass running on
+this machine and writes the answer into the marker feed the map already reads,
+so nothing about the map has to change.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+import geo  # noqa: E402
+
+OVERPASS = os.environ.get("PI_POI_OVERPASS", "http://127.0.0.1:8002")
+NOMINATIM = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
+MARKERS = os.environ.get("PI_POI_MARKERS", "/dev/shm/pi-mesh-nodes")
+FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
+RADIUS = int(os.environ.get("PI_POI_RADIUS", "1500"))
+
+
+def ask_overpass(query, base=OVERPASS, timeout=90):
+    url = base.rstrip("/") + "/api/interpreter"
+    data = urllib.parse.urlencode({"data": query}).encode()
+    with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def ask_nominatim(query, base=NOMINATIM, timeout=20):
+    url = base.rstrip("/") + "/search?" + urllib.parse.urlencode(
+        {"q": query, "format": "jsonv2", "limit": 10})
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def where_is_the_map():
+    """The map's last flyTo, which is the best guess at what is on screen.
+
+    The map does not publish its camera, so this is the last place it was told
+    to go. Good enough: "show cafes" almost always follows "show me <place>".
+    """
+    try:
+        with open(FLYTO) as fh:
+            parts = fh.read().split()
+        return float(parts[0]), float(parts[1])
+    except Exception:                              # noqa: BLE001
+        return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("category", help="cafe, restaurant, toilet, ... or 'clear'")
+    ap.add_argument("where", nargs="*", help="a place name, or lat lon")
+    ap.add_argument("--radius", type=int, default=RADIUS, help="metres")
+    ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    if args.category == "clear":
+        open(MARKERS, "w").close()
+        print("cleared")
+        return 0
+
+    lat = lon = None
+    if len(args.where) >= 2:
+        try:
+            lat, lon = float(args.where[0]), float(args.where[1])
+        except ValueError:
+            lat = lon = None
+    if lat is None and args.where:
+        place = geo.parse_nominatim(ask_nominatim(" ".join(args.where)))
+        if place is None:
+            print("pi-poi: no such place: %s" % " ".join(args.where),
+                  file=sys.stderr)
+            return 1
+        lat, lon = place.lat, place.lon
+        with open(FLYTO, "w") as fh:
+            fh.write(place.flyto_line() + "\n")
+    if lat is None:
+        here = where_is_the_map()
+        if here is None:
+            print("pi-poi: the map has not been anywhere yet; give a place",
+                  file=sys.stderr)
+            return 1
+        lat, lon = here
+
+    try:
+        query = geo.overpass_query(args.category, lat, lon, args.radius)
+    except ValueError as exc:
+        print("pi-poi: %s" % exc, file=sys.stderr)
+        return 2
+
+    body = ask_overpass(query)
+    lines = geo.marker_lines(body, int(time.time()), limit=args.limit)
+    with open(MARKERS, "w") as fh:
+        fh.write(lines + ("\n" if lines else ""))
+
+    n = len(lines.splitlines()) if lines else 0
+    if args.json:
+        print(json.dumps({"category": args.category, "lat": lat, "lon": lon,
+                          "radius": args.radius, "count": n}))
+    else:
+        print("%d %s around %.4f %.4f (r=%dm)"
+              % (n, args.category, lat, lon, args.radius))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

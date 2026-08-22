@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""pi-intent: read a spoken command and say what it meant.
+
+    pi-intent "show cafes on map"      -> {"intent": "show_poi", ...}
+    echo "広島の地図" | pi-intent
+    pi-intent --act "show cafes on map"   ...and do it
+
+Rules answer the common sentences immediately; anything else goes to
+llama.cpp with Qwen2.5-0.5B, which costs about a second on this machine.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+import intent as intent_mod  # noqa: E402
+
+
+def act(result):
+    """Carry out an intent with the tools that already exist."""
+    name = result["intent"]
+    if name == "show_place" and result["place"]:
+        return subprocess.run(["pi-geocode", "--fly", result["place"]]).returncode
+    if name == "show_poi":
+        if not result["category"]:
+            # Better to say nothing was understood than to show cafes to
+            # someone who asked for something else.
+            print("pi-intent: understood 'show', but not what to show",
+                  file=sys.stderr)
+            return 1
+        cmd = ["pi-poi", result["category"]]
+        if result["place"]:
+            cmd += result["place"].split()
+        return subprocess.run(cmd).returncode
+    if name == "clear_poi":
+        return subprocess.run(["pi-poi", "clear"]).returncode
+    print("pi-intent: nothing to do for %s" % name, file=sys.stderr)
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("text", nargs="*")
+    ap.add_argument("--act", action="store_true", help="carry the intent out")
+    ap.add_argument("--no-model", action="store_true",
+                    help="rules only; never wake llama.cpp")
+    ap.add_argument("--time", action="store_true", help="report how long it took")
+    args = ap.parse_args()
+
+    text = " ".join(args.text) if args.text else sys.stdin.read()
+    t0 = time.time()
+    quick = intent_mod.by_rule(text)
+    result = quick if quick is not None else (
+        intent_mod._empty() if args.no_model
+        else intent_mod.parse(intent_mod.by_model(text)))
+    dt = time.time() - t0
+
+    out = dict(result)
+    out["by"] = "rule" if quick is not None else (
+        "none" if args.no_model else "model")
+    if args.time:
+        out["seconds"] = round(dt, 2)
+    print(json.dumps(out, ensure_ascii=False))
+    return act(result) if args.act else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

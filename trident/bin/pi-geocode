@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""pi-geocode: turn a place name into somewhere the map can fly to.
+
+    pi-geocode hiroshima            -> 34.391606 132.451816 10
+    pi-geocode --fly "宮島"          -> ...and write it to the map's IPC file
+    pi-geocode --json "paris"
+
+Asks the Nominatim running on this machine, so it works with no network. The
+recogniser matches a hand-written table of nine cities; this is what happens for
+the rest of the planet.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+import geo  # noqa: E402
+
+DEFAULT_URL = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
+FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
+
+
+def search(query, base=DEFAULT_URL, timeout=20):
+    url = base.rstrip("/") + "/search?" + urllib.parse.urlencode(
+        {"q": query, "format": "jsonv2", "limit": 10})
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("query", nargs="+")
+    ap.add_argument("--fly", action="store_true",
+                    help="write the result to the map's flyTo file")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--url", default=DEFAULT_URL)
+    args = ap.parse_args()
+
+    query = " ".join(args.query)
+    try:
+        body = search(query, args.url)
+    except Exception as exc:                      # noqa: BLE001
+        print("pi-geocode: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+        return 2
+    place = geo.parse_nominatim(body)
+    if place is None:
+        print("pi-geocode: no match for %r" % query, file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps({"lat": place.lat, "lon": place.lon,
+                          "zoom": place.zoom, "name": place.name},
+                         ensure_ascii=False))
+    else:
+        print(place.flyto_line(), place.name)
+    if args.fly:
+        with open(FLYTO, "w") as fh:
+            fh.write(place.flyto_line() + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
