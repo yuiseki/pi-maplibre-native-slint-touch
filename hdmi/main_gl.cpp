@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <iostream>
@@ -951,6 +952,7 @@ int main(int /*argc*/, char** /*argv*/) {
         int prev = -1;
         size_t show = 0;
         int otick = 0;                  // sensor-read throttle counter
+        char clock[6] = "";             // last "HH:MM" pushed to the UI
         float la_pitch = 1e9f;          // last applied pitch/bearing (change gate)
         float la_bearing = 1e9f;
         double la_lat = 1e9, la_lon = 1e9;   // last applied GPS centre (change gate)
@@ -987,6 +989,22 @@ int main(int /*argc*/, char** /*argv*/) {
                 }
                 win->window().request_redraw();
             }
+            // Wall clock. This timer runs at 60ms, but the readout only
+            // changes once a minute, so only touch the property then: a
+            // SharedString assignment 16x/s would be pure churn in the render
+            // budget. Rendering is continuous, so no explicit redraw is needed.
+            {
+                char hhmm[6];
+                const std::time_t t = std::time(nullptr);
+                std::tm tm{};
+                if (::localtime_r(&t, &tm) &&
+                    std::strftime(hhmm, sizeof hhmm, "%H:%M", &tm) &&
+                    std::strcmp(hhmm, ss->clock) != 0) {
+                    std::memcpy(ss->clock, hhmm, sizeof hhmm);
+                    win->set_clock_text(slint::SharedString(hhmm));
+                }
+            }
+
             win->set_saver_state(stage);
             win->set_battery_percent(battery_pct->load());
             win->set_battery_plugged(plugged->load());

@@ -38,7 +38,11 @@ Verified on a Raspberry Pi 4 (Debian 13 / trixie, aarch64, V3D 4.2.14.0) with a
   publishes the texture with `create_from_borrowed_gl_2d_rgba_texture(...,
   BottomLeft)`, saving/restoring GL state around the maplibre render.
 - `gl_map_window.slint`: the Pi touch layout (large buttons, a right-edge
-  vertical zoom slider + zoom buttons, no pitch/bearing sliders).
+  vertical zoom slider + zoom buttons, no pitch/bearing sliders), plus a
+  full-width status bar along the top: GPS satellite icon and fix count on the
+  left, the wall clock (`HH:MM`) centred, and Wi-Fi/SSID + battery on the
+  right. Everything in the bar is fed from `main_gl.cpp` and hides itself when
+  its source is absent, so a machine without GPS or a battery just shows less.
 
 ## Build
 

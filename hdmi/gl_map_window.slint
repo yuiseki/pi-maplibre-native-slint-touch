@@ -49,6 +49,9 @@ export component MapWindow inherits Window {
     in property <bool> sensor-available: false;
     callback sync-toggled(bool);
 
+    // Wall clock, "HH:MM", pushed from C++ (empty = hidden).
+    in property <string> clock-text: "";
+
     // Battery (PiSugar): percent + charging state for a small corner readout.
     in property <int> battery-percent: -1;     // -1 = unknown / hidden
     in property <bool> battery-plugged: false;
@@ -196,6 +199,18 @@ export component MapWindow inherits Window {
                     height: 20px;
                     visible: root.kbd-connected;
                     source: root.kbd-icon;
+                }
+                Text {                      // clock, centred in the gap between clusters
+                    x: (parent.width - 60px) / 2;
+                    y: 0px;
+                    width: 60px;
+                    height: 100%;
+                    visible: root.clock-text != "";
+                    text: root.clock-text;
+                    color: white;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
                 // Right cluster, left to right:  [Wi-Fi] SSID  [battery] AC NN%
                 Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
