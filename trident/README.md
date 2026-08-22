@@ -41,8 +41,68 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 | `bin/pi-say` | 日本語TTS(piper-plus tsukuyomi → 3.5mmジャック)。結果WAVを (model,rate,text) でキャッシュ(`~/piper-tts/say-cache/`)。定型文「承知しました。…を表示します。」は piper 合成が A72 で **~6秒**かかるので、初回のみ合成→以降は再生のみ(~3秒=音声長)に短縮。`PI_SAY_NO_CACHE=1` で無効化 |
 | `bin/say-muted` | pi-say を half-duplex 化(再生中は pi-hear をミュートして自己集音回避) |
 | `bin/pi-flyto` | 地図IPC クライアント。`pi-flyto hiroshima` 等で `/dev/shm/pi-map-flyto` に書く |
+| `bin/pi-net` | Wi-Fi 状態表示 / 再接続 / 時限切断(`pi-net disconnect [秒]`。復帰を切断より先に予約する) |
+| `bin/pi-kbd` | Bluetooth キーボード(CardKB2)を**Pi 内蔵の無線**で掴む。接続確立の数秒だけ Wi-Fi 送信電力を絞る(下記) |
 | `../hdmi/main_gl.cpp` | 地図アプリ(C++/Slint/femtovg-GL)。**flyTo IPC タイマー + render-pause** を追加済み |
 | `experiments/` | エンジン比較・LLM校正・意図抽出の検証スクリプト(雑) |
+
+## Bluetooth キーボードと Wi-Fi の共存(pi5-deck)
+
+pi5-deck の CardKB2 は当初 USB Bluetooth ドングル経由でしか繋がらなかった。内蔵の
+コントローラでは接続試行が **約99%失敗**し、`LE Connection Complete` の約340ms後に
+`Connection Failed to be Established`(0x3e)で切れる。340ms は CONNECT_IND 後の
+6接続イベント窓に一致する = ペリフェラルからの応答が一度も届いていない。一方でアド
+バタイズは **-31dBm** で完璧に受信できており、距離もペアリングも問題ない。
+
+**原因は感度抑圧**。CYW43455 は Wi-Fi と Bluetooth で1本のアンテナを共有しており、
+Wi-Fi 送信機が隣の Bluetooth 受信段を潰す。独立アンテナを持つ USB ドングルでこれが
+起きなかったのはそのため。
+
+否定した仮説を残しておく(どちらも「効きそう」に見えるが無効だった):
+
+- **接続間隔の不一致による LL 手続き衝突**。CardKB2 が要求する 7.5-20ms に
+  `conn_{min,max}_interval` を合わせても 1.7% のまま。そもそも 340ms は LL 応答
+  タイムアウト(接続イベント40回 = 1.2〜2秒)には早すぎる
+- **共存アービタの設定**。Wi-Fi ファームの nvram の `btc_mode` を 0/2/1 と書き換えて
+  ドライバを再読み込みしても、成功率は 1〜2% で動かない
+
+決め手は送信電力。**Wi-Fi を接続したまま** 31dBm → 1dBm に落とすと、同じ測定が
+**1.5% → 86%** に変わった。
+
+そして**壊れるのは確立の瞬間だけ**で、一度張ったリンクは full power で 180秒 + 60秒、
+切断ゼロ。だから回線を落とす必要はない。`pi-kbd` は握手に必要な数秒だけ送信機を
+絞ってすぐ戻す。**ネットワークは一度も切れない**。強制切断からの再接続は 5/5 成功。
+
+```
+pi-kbd            # いまどのコントローラに繋がっているか
+pi-kbd connect    # 内蔵コントローラで繋ぐ(Wi-Fi を数秒だけ絞る)
+pi-kbd present    # 使える状態なら exit 0
+pi-kbd watch      # 繋がり続けるように見張る(pi-kbd.service が実行)
+```
+
+設定は `/etc/default/pi-kbd`(雛形 `trident/etc/pi-kbd.default`)。AP から離れて使う
+なら `PI_KBD_TXPOWER_MBM` を上げる。握手は数秒なので多少高くても構わない。
+
+### 「繋がった」の判定に使ってはいけないもの
+
+どちらも嘘をつく。両方を組み合わせて初めて信用できる。
+
+- **BlueZ の `Connected` プロパティ**。`LE Connection Complete` で立つ = CONNECT_IND を
+  送った瞬間に立つ。ペリフェラルはまだ何も答えていない。実測で、リンク層が一度も
+  確立しなかった試行の 6回中6回が `Connected: yes` を返した。しかも既定コントローラ
+  の値なので、コントローラを指定できない
+- **HID 入力ノードの存在**。BlueZ は再バインドのため切断後も uhid デバイスを保持する。
+  `Disconnection successful` の5秒後もノードは残っていた
+
+`pi-kbd` は「**そのコントローラに紐づくノードがある**」かつ「**カーネルの接続一覧
+(`hcitool -i hciN con`)に5秒間途切れず載っている**」を条件にしている。失敗した試行は
+340ms で崩れて即リトライされるため状態が明滅する。その明滅を落とすのが待ち時間の役割。
+
+### キーコード
+
+内蔵コントローラ経由では **HID usage も Linux キーコードも完全に正しい**(実測: q w e
+r t y / 1〜6 / a s d f g h の18キーすべて一致。`0x14`→`KEY_Q`, `0x1e`→`KEY_1`,
+`0x04`→`KEY_A`)。なお CardKB2 に **Ctrl キーは物理的に無い**。
 
 ## 端末上の配置(pi4-d-hdmi)
 
