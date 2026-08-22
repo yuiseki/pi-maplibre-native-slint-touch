@@ -83,6 +83,39 @@ pi-kbd watch      # 繋がり続けるように見張る(pi-kbd.service が実�
 設定は `/etc/default/pi-kbd`(雛形 `trident/etc/pi-kbd.default`)。AP から離れて使う
 なら `PI_KBD_TXPOWER_MBM` を上げる。握手は数秒なので多少高くても構わない。
 
+### リンクを切らさないことが最優先
+
+**切れた瞬間ではなく、切れた後が高い**。再接続は上記の感度抑圧との戦いになるので、
+一度落ちると数十秒キーが効かない。実測で 1回の切断につき **99回の再接続失敗**。
+
+カーネル既定の監視タイムアウトは **420ms**。無操作の BLE リンクは接続間隔
+(この機では 48.75ms)ごとに空パケットを交換するだけなので、420ms は**約9個分**。
+隣のアンテナから Wi-Fi が一吹きすれば終わる。トレースにもそう出ている:
+
+```
+37.3s   ACL Data RX ...                      ← 通信が途絶える
+97.1s   Authenticated Payload Timeout (0x57)
+105.3s  Disconnect: Connection Timeout (0x08)
+```
+
+300秒の実測:
+
+| 監視タイムアウト | 接続維持 | 切断 | 再接続試行 |
+|---|---|---|---|
+| 420ms (既定) | 19/40 | 3回 | 208回 |
+| 6000ms | **60/60** | **0** | **0** |
+
+**設定する場所を間違えないこと**。効くのは BlueZ のデバイス個別の値だけ。
+
+- ✗ `/sys/kernel/debug/bluetooth/hci0/supervision_timeout` … 書けるが無視される
+- ✗ `/etc/bluetooth/main.conf` の `[LE] ConnectionSupervisionTimeout` … 同上
+- ✓ `/var/lib/bluetooth/<adapter>/<device>/info` の `[ConnectionParameters] Timeout=`
+
+前2つは既定値で、**Load Connection Parameters で与えられる個別値に上書きされる**
+(main.conf にもそう書いてある)。どちらを設定しても全接続が 420ms のままだった。
+`pi-kbd tune` が3つ目を書き、bluetooth を再起動して読ませる(起動時にしか読まれない)。
+サービスが起動時に実行するので、通常は意識しなくてよい。
+
 ### 「繋がった」の判定に使ってはいけないもの
 
 どちらも嘘をつく。両方を組み合わせて初めて信用できる。
@@ -94,8 +127,13 @@ pi-kbd watch      # 繋がり続けるように見張る(pi-kbd.service が実�
 - **HID 入力ノードの存在**。BlueZ は再バインドのため切断後も uhid デバイスを保持する。
   `Disconnection successful` の5秒後もノードは残っていた
 
+- **接続一覧に載っていること**だけでも足りない。切断処理中のリンクは
+  `state 7`(BT_CONFIG、暗号化前)のまま一覧に残る。アドレスの一致だけを見ていた
+  ため、キーが失われている最中に「繋がっている」と判定し、`pi-kbd watch` が
+  再接続に介入しなかった
+
 `pi-kbd` は「**そのコントローラに紐づくノードがある**」かつ「**カーネルの接続一覧
-(`hcitool -i hciN con`)に5秒間途切れず載っている**」を条件にしている。失敗した試行は
+(`hcitool -i hciN con`)に `state 1` で5秒間途切れず載っている**」を条件にしている。失敗した試行は
 340ms で崩れて即リトライされるため状態が明滅する。その明滅を落とすのが待ち時間の役割。
 
 ### キーコード

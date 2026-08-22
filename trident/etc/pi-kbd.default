@@ -13,6 +13,14 @@ PI_KBD_TXPOWER_MBM=100
 # The wireless interface whose transmitter shares the antenna with Bluetooth.
 PI_KBD_WIFI=wlan0
 
+# Supervision timeout for the link, in units of 10 ms. The kernel's default is
+# 42 (420 ms) -- about nine connection intervals of an idle link, which a burst
+# from the Wi-Fi transmitter sharing the antenna ends by itself. Losing the link
+# is expensive here because every reconnection has to fight back through the
+# desense. Measured over 300 s: at 420 ms the link was up 19 samples out of 40
+# with 3 drops and 208 reconnection attempts; at 6000 ms, 60 out of 60 with none.
+PI_KBD_SUPERVISION=600
+
 # Attempts per pi-kbd connect, and how often `pi-kbd watch` checks.
 PI_KBD_TRIES=6
 PI_KBD_POLL=20

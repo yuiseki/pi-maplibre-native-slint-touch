@@ -104,8 +104,12 @@ def fake_btctl(script):
 
 
 # hcitool -i hciN con output, which is the kernel's live connection list.
-CONNECTED = "< LE 88:56:A6:C2:CE:8A handle 64 state 1 lm CENTRAL"
+# state 1 is BT_CONNECTED; the flags say the pairing actually completed.
+CONNECTED = "< LE 88:56:A6:C2:CE:8A handle 64 state 1 lm CENTRAL AUTH ENCRYPT"
 NOT_CONNECTED = "Connections:"
+# state 7 is BT_DISCONN -- the link is being torn down, and the flags are gone.
+# It is still listed, so matching the address alone reads this as connected.
+TEARING_DOWN = "< LE 88:56:A6:C2:CE:8A handle 64 state 7 lm CENTRAL"
 
 
 def run(args, devices=None, env=None):
@@ -117,6 +121,9 @@ def run(args, devices=None, env=None):
     e["PI_KBD_SETTLE"] = "3"
     e["PI_KBD_DEV"] = "hci0"
     e["PI_KBD_SUDO"] = ""      # the stubs are plain scripts, not privileged tools
+    # Never let a test touch the machine it runs on: tuning restarts bluetoothd.
+    e.setdefault("PI_KBD_SYSTEMCTL", "true")
+    e.setdefault("PI_KBD_SETTLE_BT", "0")
     if not (env and "PI_KBD_HCITOOL" in env):
         e["PI_KBD_HCITOOL"] = fake_btctl([CONNECTED])
     e.setdefault("PI_KBD_BTCTL", "true")
@@ -191,6 +198,17 @@ class LinkLivenessTest(unittest.TestCase):
                 env={"PI_KBD_HCITOOL": fake_btctl([CONNECTED, CONNECTED, NOT_CONNECTED])})
         self.assertNotEqual(r.returncode, 0)
 
+    def test_a_link_being_torn_down_is_not_present(self):
+        # Observed on pi5-deck: the entry stays in the list with state 7 while
+        # the link goes away, so "the address is listed" is not enough.
+        r = run(["present"], BOTH, env={"PI_KBD_HCITOOL": fake_btctl([TEARING_DOWN])})
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_a_link_that_drops_mid_window_is_not_present(self):
+        r = run(["present"], BOTH,
+                env={"PI_KBD_HCITOOL": fake_btctl([CONNECTED, TEARING_DOWN])})
+        self.assertNotEqual(r.returncode, 0)
+
     def test_a_lingering_node_with_a_dead_link_is_not_present(self):
         # BlueZ keeps the uhid node across a disconnect, so the node alone lies.
         r = run(["present"], BOTH, env={"PI_KBD_HCITOOL": fake_btctl([NOT_CONNECTED])})
@@ -205,6 +223,67 @@ class LinkLivenessTest(unittest.TestCase):
         r = run(["connect", "--dry-run"], BOTH,
                 env={"PI_KBD_HCITOOL": fake_btctl([NOT_CONNECTED])})
         self.assertIn("txpower fixed", r.stdout)
+
+
+class TuneTest(unittest.TestCase):
+    """The link must be hard to lose, because getting it back is the expensive part.
+
+    Measured on pi5-deck: in 200 s the link dropped 3 times on supervision
+    timeout, and each drop cost 99 failed reconnection attempts before one
+    landed. Keystrokes in those windows are simply gone. The default supervision
+    timeout is 420 ms, which is nothing next to a Wi-Fi transmitter sharing the
+    antenna; HID links normally allow several seconds.
+    """
+
+    def info_file(self, body=""):
+        d = os.path.join(TMP, "bluetooth", "88:A2:9E:A2:E3:32", "88:56:A6:C2:CE:8A")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "info"), "w") as fh:
+            fh.write(body)
+        return os.path.join(TMP, "bluetooth")
+
+    def test_tune_writes_the_per_device_timeout(self):
+        # Only this path takes effect. Measured on pi5-deck: the debugfs knob and
+        # main.conf's [LE] default both left the link on 420 ms, because BlueZ's
+        # per-device Load Connection Parameters supersedes them.
+        root = self.info_file("[General]\nName=CardKB2-CE8A\n")
+        r = run(["tune"], NOTHING, env={"PI_KBD_BLUEZ": root})
+        body = open(os.path.join(root, "88:A2:9E:A2:E3:32",
+                                 "88:56:A6:C2:CE:8A", "info")).read()
+        self.assertIn("[ConnectionParameters]", body)
+        self.assertIn("Timeout=600", body)
+        self.assertIn("Name=CardKB2-CE8A", body)   # the rest of the file survives
+
+    def test_the_timeout_is_configurable(self):
+        root = self.info_file("[General]\n")
+        run(["tune"], NOTHING,
+            env={"PI_KBD_BLUEZ": root, "PI_KBD_SUPERVISION": "900"})
+        body = open(os.path.join(root, "88:A2:9E:A2:E3:32",
+                                 "88:56:A6:C2:CE:8A", "info")).read()
+        self.assertIn("Timeout=900", body)
+
+    def test_tuning_twice_does_not_stack_the_section(self):
+        root = self.info_file("[General]\n")
+        run(["tune"], NOTHING, env={"PI_KBD_BLUEZ": root})
+        r = run(["tune"], NOTHING, env={"PI_KBD_BLUEZ": root})
+        body = open(os.path.join(root, "88:A2:9E:A2:E3:32",
+                                 "88:56:A6:C2:CE:8A", "info")).read()
+        self.assertEqual(body.count("[ConnectionParameters]"), 1)
+        self.assertIn("already", r.stdout)   # and says it changed nothing
+
+    def test_tune_replaces_an_existing_section(self):
+        root = self.info_file("[General]\n\n[ConnectionParameters]\n"
+                              "MinInterval=24\nMaxInterval=40\n"
+                              "Latency=0\nTimeout=42\n")
+        run(["tune"], NOTHING, env={"PI_KBD_BLUEZ": root})
+        body = open(os.path.join(root, "88:A2:9E:A2:E3:32",
+                                 "88:56:A6:C2:CE:8A", "info")).read()
+        self.assertNotIn("Timeout=42", body)
+        self.assertIn("Timeout=600", body)
+
+    def test_tune_says_so_when_there_is_no_bond_yet(self):
+        r = run(["tune"], NOTHING, env={"PI_KBD_BLUEZ": os.path.join(TMP, "nope")})
+        self.assertNotEqual(r.returncode, 0)
 
 
 class ConfigTest(unittest.TestCase):
@@ -231,7 +310,8 @@ class DryRunTest(unittest.TestCase):
         self.assertLess(out.index("txpower fixed"), out.rindex("txpower auto"),
                         "must lower before restoring")
         # The dead-man is only stood down after the radio is actually back.
-        self.assertLess(out.rindex("txpower auto"), out.index("systemctl stop"),
+        self.assertLess(out.rindex("txpower auto"),
+                        out.index("stop pi-kbd-txrestore.timer"),
                         "restore the radio before disarming the dead-man")
 
     def test_dry_run_arms_the_dead_man_before_lowering(self):

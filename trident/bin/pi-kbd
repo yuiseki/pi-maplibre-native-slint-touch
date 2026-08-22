@@ -40,6 +40,9 @@ DEVICES="${PI_KBD_INPUT_DEVICES:-/proc/bus/input/devices}"
 IW="${PI_KBD_IW:-/usr/sbin/iw}"
 BTCTL="${PI_KBD_BTCTL:-bluetoothctl}"
 HCITOOL="${PI_KBD_HCITOOL:-hcitool}"
+BLUEZ="${PI_KBD_BLUEZ:-/var/lib/bluetooth}"
+SYSTEMCTL="${PI_KBD_SYSTEMCTL:-systemctl}"
+SUPERVISION="${PI_KBD_SUPERVISION:-600}"   # 6 s, in units of 10 ms
 
 SUDO=""
 [ "$(id -u)" != "0" ] && SUDO="sudo -n"
@@ -136,7 +139,11 @@ linked() {
     want="$(lower "$MAC")"
     [ -n "$dev" ] || return 1
     for i in $(seq 1 "$n"); do
-        $SUDO $HCITOOL -i "$dev" con 2>/dev/null | tr 'A-Z' 'a-z' | grep -q "$want" || return 1
+        # "state 1" is BT_CONNECTED. The address alone is not enough: a link
+        # being torn down stays listed as "state 7" (BT_DISCONN) for a while,
+        # which was read as connected while keystrokes were already being lost.
+        $SUDO $HCITOOL -i "$dev" con 2>/dev/null | tr 'A-Z' 'a-z' \
+            | grep -q "$want.*state 1" || return 1
         [ "$i" -lt "$n" ] && sleep 1
     done
     return 0
@@ -195,6 +202,60 @@ run_quiet() {
     "$@" >/dev/null 2>&1
 }
 
+# Losing the link is expensive here in a way it is not on an ordinary machine:
+# every reconnection has to fight back through the desense described above, and
+# measured on pi5-deck one drop cost 99 failed attempts and tens of seconds with
+# no keyboard at all. So the link has to be hard to lose.
+#
+# The kernel's default supervision timeout is 420 ms. An idle BLE link carries
+# nothing but empty PDUs every connection interval (48.75 ms here), so 420 ms is
+# about nine of them -- a burst of Wi-Fi from the antenna next door ends the
+# link. The trace shows exactly that: traffic stops, an Authenticated Payload
+# Timeout fires, and the connection is torn down with Connection Timeout (0x08).
+# HID links normally allow several seconds.
+#
+# It has to be set *here*, in BlueZ's per-device store. Two other places look
+# like they should work and do not: the kernel's debugfs supervision_timeout,
+# and ConnectionSupervisionTimeout under [LE] in main.conf. Both are defaults,
+# and BlueZ's per-device Load Connection Parameters supersedes them -- with
+# either of those set, every connection still came up at 420 ms; with this one,
+# at 6000 ms.
+do_tune() {
+    local adapter info tmp
+    adapter="$(onboard_adapter | tr 'a-z' 'A-Z')"
+    info="$BLUEZ/$adapter/$(printf '%s' "$MAC" | tr 'a-z' 'A-Z')/info"
+    if [ -n "$DRY" ]; then
+        echo "would run: set Timeout=$SUPERVISION in $info"
+        return 0
+    fi
+    if ! $SUDO test -r "$info"; then
+        echo "pi-kbd: no bond stored at $info (pair the keyboard first)" >&2
+        return 1
+    fi
+    if $SUDO grep -q "^Timeout=$SUPERVISION\$" "$info" 2>/dev/null; then
+        echo "connection parameters already set (Timeout=$SUPERVISION)"
+        return 0
+    fi
+    # Rewrite the section rather than append: BlueZ reads the first one, so a
+    # stacked second copy would be silently ignored.
+    tmp="$(mktemp)"
+    $SUDO cat "$info" | awk '
+        /^\[ConnectionParameters\]/ { skip=1; next }
+        /^\[/ { skip=0 }
+        !skip { print }
+    ' > "$tmp"
+    {
+        printf '\n[ConnectionParameters]\n'
+        printf 'MinInterval=24\nMaxInterval=40\nLatency=0\nTimeout=%s\n' "$SUPERVISION"
+    } >> "$tmp"
+    $SUDO cp "$tmp" "$info"
+    rm -f "$tmp"
+    echo "set Timeout=$SUPERVISION; restarting bluetooth so it is loaded"
+    # BlueZ reads this at startup and hands it to the kernel; nothing rereads it.
+    run_quiet $SUDO $SYSTEMCTL restart bluetooth
+    sleep "${PI_KBD_SETTLE_BT:-3}"
+}
+
 do_connect() {
     local adapter i
     adapter="$(onboard_adapter)"
@@ -203,6 +264,8 @@ do_connect() {
         echo "already attached on $adapter"
         return 0
     fi
+
+    do_tune
 
     # Arm the restore before touching the transmitter, the same way pi-net arms
     # a reconnect before disconnecting: if this process is killed between the two
@@ -222,7 +285,7 @@ do_connect() {
     done
 
     run $SUDO "$IW" dev "$WIFI" set txpower auto
-    run_quiet $SUDO systemctl stop pi-kbd-txrestore.timer || true
+    run_quiet $SUDO $SYSTEMCTL stop pi-kbd-txrestore.timer || true
 
     [ -n "$DRY" ] && return 0
     [ "$ok" = 0 ] || echo "pi-kbd: gave up after $TRIES attempts" >&2
@@ -240,6 +303,7 @@ do_disconnect() {
 # fragile handshake -- so the recovery has to be automatic, not a thing the user
 # discovers they need a keyboard to fix.
 do_watch() {
+    do_tune
     while true; do
         do_present || do_connect >/dev/null 2>&1
         sleep "${PI_KBD_POLL:-20}"
@@ -257,6 +321,7 @@ done
 
 case "$CMD" in
     status)     do_status;;
+    tune)       do_tune;;
     dev)        onboard_dev;;
     present)    do_present;;
     connect)    do_connect;;
@@ -266,6 +331,6 @@ case "$CMD" in
         sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
         exit 0;;
     *)
-        echo "usage: pi-kbd [status|connect|disconnect|present|watch|dev] [--dry-run]" >&2
+        echo "usage: pi-kbd [status|connect|disconnect|present|watch|tune|dev] [--dry-run]" >&2
         exit 2;;
 esac
