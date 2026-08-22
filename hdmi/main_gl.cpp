@@ -268,6 +268,8 @@ int main(int /*argc*/, char** /*argv*/) {
         win->set_wifi_icon((*wifi_icons)[0]);
         // Keyboard-connected indicator (green glyph); visibility toggled in slint.
         win->set_kbd_icon(load_png_rgba(home + "/images/kbd-green.png"));
+        // Microphone-present indicator, same treatment.
+        win->set_mic_icon(load_png_rgba(home + "/images/mic-green.png"));
     }
 
     // Status-bar battery icons (Icons8): index 0=charge(plugged), 1=full,
@@ -832,11 +834,13 @@ int main(int /*argc*/, char** /*argv*/) {
     auto net_ssid = std::make_shared<std::string>();
     auto net_ssid_mtx = std::make_shared<std::mutex>();
     auto kbd_conn = std::make_shared<std::atomic<bool>>(false);
+    auto mic_present = std::make_shared<std::atomic<bool>>(false);
     {
         auto ns = net_state;
         const char* ifenv = std::getenv("MAPLIBRE_NET_IFACE");
         std::string iface_override = ifenv ? ifenv : "";
-        std::thread([ns, iface_override, net_ssid, net_ssid_mtx, kbd_conn]() {
+        std::thread([ns, iface_override, net_ssid, net_ssid_mtx, kbd_conn,
+                     mic_present]() {
             while (true) {
                 // Default-route interface from /proc/net/route (the line whose
                 // hex Destination is 00000000).
@@ -908,30 +912,68 @@ int main(int /*argc*/, char** /*argv*/) {
                 // on Bus=0003 (USB) or Bus=0005 (Bluetooth) whose Handlers
                 // include "kbd". HDMI-CEC (Bus=001e) and platform pseudo-
                 // keyboards live on other buses, so they are excluded.
+                //
+                // "Handlers=kbd" alone is not enough: a USB sound card exposes
+                // its volume buttons as an HID with KEY_MUTE/VOLUMEUP/DOWN, so
+                // plugging in a mic used to light the keyboard indicator. Ask
+                // for the top letter row (KEY_Q..KEY_P, codes 16-25) as well.
+                // Those codes are layout-independent -- evdev reports position,
+                // not the printed legend -- so every real keyboard has them and
+                // a volume-key HID has none.
+                constexpr unsigned long long LETTER_ROW = 0x03FF0000ULL;
                 bool kbd = false;
                 {
                     std::ifstream pf("/proc/bus/input/devices");
                     std::string line;
-                    bool ext = false, has_kbd = false;
+                    bool ext = false, has_kbd = false, has_letters = false;
+                    auto flush = [&]() {
+                        if (ext && has_kbd && has_letters)
+                            kbd = true;
+                    };
                     while (std::getline(pf, line)) {
                         if (line.empty()) {
-                            if (ext && has_kbd) {
-                                kbd = true;
+                            flush();
+                            if (kbd)
                                 break;
-                            }
-                            ext = false;
-                            has_kbd = false;
+                            ext = has_kbd = has_letters = false;
                         } else if (line.rfind("I:", 0) == 0) {
                             ext = line.find("Bus=0005") != std::string::npos ||
                                   line.find("Bus=0003") != std::string::npos;
                         } else if (line.rfind("H: Handlers=", 0) == 0) {
                             has_kbd = line.find("kbd") != std::string::npos;
+                        } else if (line.rfind("B: KEY=", 0) == 0) {
+                            // Groups run most-significant first, so the last
+                            // one holds codes 0-63 -- where the letters are.
+                            const size_t sp = line.find_last_of(' ');
+                            const std::string last =
+                                sp == std::string::npos ? std::string()
+                                                        : line.substr(sp + 1);
+                            const unsigned long long bits =
+                                last.empty() ? 0ULL
+                                             : std::strtoull(last.c_str(),
+                                                             nullptr, 16);
+                            has_letters = (bits & LETTER_ROW) == LETTER_ROW;
                         }
                     }
-                    if (ext && has_kbd)
-                        kbd = true;
+                    flush();
                 }
                 kbd_conn->store(kbd);
+
+                // Microphone present? Any ALSA PCM that can capture. Reading
+                // /proc/asound/pcm avoids forking arecord every few seconds,
+                // and covers USB, I2S and HAT mics alike.
+                bool mic = false;
+                {
+                    std::ifstream af("/proc/asound/pcm");
+                    std::string line;
+                    while (std::getline(af, line)) {
+                        if (line.find("capture") != std::string::npos) {
+                            mic = true;
+                            break;
+                        }
+                    }
+                }
+                mic_present->store(mic);
 
                 std::this_thread::sleep_for(std::chrono::seconds(3));
             }
@@ -1140,6 +1182,7 @@ int main(int /*argc*/, char** /*argv*/) {
                     win->set_wifi_ssid(slint::SharedString(net_ssid->c_str()));
                 }
                 win->set_kbd_connected(kbd_conn->load());
+                win->set_mic_present(mic_present->load());
 
                 if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);

@@ -34,6 +34,19 @@ Source: https://commons.wikimedia.org/wiki/File:OOjs_UI_icon_keyboard.svg
 The single-path glyph was filled green (#6ee06e) and rasterised to 48x48 RGBA.
 Shown in the status bar only while a USB or Bluetooth keyboard is connected.
 
+## mic.svg / mic-green.png
+
+From the **Material Design** icon set by **Google Inc.**, via Wikimedia
+Commons, licensed **CC BY 4.0**
+(https://creativecommons.org/licenses/by/4.0/).
+
+Source: https://commons.wikimedia.org/wiki/File:Ic_mic_48px.svg
+
+The single-path glyph was filled green (#6ee06e) and rasterised to 48x48 RGBA,
+matching `kbd-green.png`. Shown in the status bar only while an ALSA capture
+device exists. (OOjs UI, which supplies the keyboard glyph, has no microphone
+icon, hence the different source.)
+
 ## battery-charge.png / battery-full.png / battery-high.png / battery-middle.png / battery-low.png
 
 Flat battery icons by **Icons8** (https://icons8.com), via Wikimedia Commons.
