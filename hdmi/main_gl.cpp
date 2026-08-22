@@ -177,6 +177,26 @@ static bool map_render_paused() {
     return (rt - m) < 15000;
 }
 
+// pi-hear's state file: line 1 is a word, line 2 an optional caption. Returns
+// false when it is missing or stale -- stale means pi-hear is not running,
+// which must not read the same as pi-hear sitting idle.
+static bool read_hear_state(std::string& word, std::string& text) {
+    struct stat st {};
+    if (::stat("/dev/shm/pi-hear-state", &st) != 0)
+        return false;
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    if (now - static_cast<int64_t>(st.st_mtim.tv_sec) >= 5)
+        return false;
+    std::ifstream f("/dev/shm/pi-hear-state");
+    if (!std::getline(f, word))
+        return false;
+    if (!std::getline(f, text))
+        text.clear();
+    return true;
+}
+
 static int64_t env_secs(const char* key, int64_t def) {
     if (const char* e = std::getenv(key)) {
         if (e[0] != '\0') {
@@ -1036,6 +1056,8 @@ int main(int /*argc*/, char** /*argv*/) {
         size_t show = 0;
         int otick = 0;                  // sensor-read throttle counter
         char clock[6] = "";             // last "HH:MM" pushed to the UI
+        int cap_tick = 0;               // drives the working animation's dots
+        std::string cap_word, cap_text; // last caption pushed (change gate)
         float la_pitch = 1e9f;          // last applied pitch/bearing (change gate)
         float la_bearing = 1e9f;
         double la_lat = 1e9, la_lon = 1e9;   // last applied GPS centre (change gate)
@@ -1085,6 +1107,40 @@ int main(int /*argc*/, char** /*argv*/) {
                     std::strcmp(hhmm, ss->clock) != 0) {
                     std::memcpy(ss->clock, hhmm, sizeof hhmm);
                     win->set_clock_text(slint::SharedString(hhmm));
+                }
+            }
+
+            // Caption + working animation, at ~4 Hz. The animation is the text
+            // itself -- C++ appends the dots -- so its frame rate is exactly
+            // how often this block runs, rather than something Slint decides.
+            // That matters because recognition deliberately freezes the map to
+            // hand whisper the CPU: an indicator that re-armed the render loop
+            // at 60 fps would claw back the very cycles it is reporting on.
+            bool cap_busy = false;
+            if (++ss->cap_tick % 4 == 0) {
+                std::string word, text, caption;
+                if (read_hear_state(word, text)) {
+                    if (word == "asr") {
+                        cap_busy = true;
+                        static const char* DOTS[4] = {"", ".", "..", "..."};
+                        caption = std::string("認識中") +
+                                  DOTS[(ss->cap_tick / 4) % 4];
+                    } else if (word == "speaking") {
+                        caption = text;
+                    } else if (word == "heard") {
+                        caption = text;
+                    }
+                }
+                if (word != ss->cap_word || caption != ss->cap_text) {
+                    ss->cap_word = word;
+                    ss->cap_text = caption;
+                    win->set_caption_text(slint::SharedString(caption.c_str()));
+                    win->set_caption_busy(cap_busy);
+                    // While the map is paused nothing re-arms the loop, so the
+                    // new text would sit undrawn until recognition ended --
+                    // exactly when it is no longer needed.
+                    if (map_render_paused())
+                        win->window().request_redraw();
                 }
             }
 

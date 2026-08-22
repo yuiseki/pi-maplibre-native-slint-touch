@@ -29,6 +29,7 @@ import time
 import numpy as np
 import sounddevice as sd
 
+import hear_state
 import wake as wakelib
 import engines as enginelib
 import romaji_match
@@ -198,6 +199,7 @@ def main():
         # confirmation isn't transcribed back as input.
         try:
             open(args.mute_file, "w").close()
+            publish_state("speaking", text, hold=25.0, override=True)
             subprocess.run(["/usr/local/bin/pi-say", "--device", args.say_device,
                             text], timeout=20)
         except Exception as e:
@@ -208,28 +210,18 @@ def main():
                 os.remove(args.mute_file)
             except OSError:
                 pass
+            # Only now release the hold: doing it before the mute file goes
+            # lets the capture loop publish a stray "muted" in between.
+            publish_state("listening", override=True)
 
-    # Publish what we are doing, for the map's microphone indicator. The file
-    # doubles as a heartbeat: a consumer that finds it stale knows pi-hear is
-    # not running, which is a different thing from pi-hear being idle. Rewritten
-    # on every state change and at most once a second otherwise, because the
-    # capture loop comes round many times a second and re-stating the same word
-    # is pointless even on tmpfs.
-    _state = {"word": None, "at": 0.0}
+    # Publish what we are doing, for the map's caption strip and mic icon.
+    # The precedence rules live in hear_state.StatePublisher, which is tested;
+    # they are fiddly enough that getting them wrong is invisible until you
+    # watch the screen (recognition flickered, the transcription never showed).
+    _pub = hear_state.StatePublisher(args.state_file)
 
-    def publish_state(word):
-        if not args.state_file:
-            return
-        now = time.monotonic()
-        if word == _state["word"] and now - _state["at"] < 1.0:
-            return
-        _state["word"] = word
-        _state["at"] = now
-        try:
-            with open(args.state_file, "w") as sf:
-                sf.write(word + "\n")
-        except OSError:
-            pass
+    def publish_state(word, text="", hold=0.0, override=False):
+        _pub.publish(word, text, hold=hold, override=override)
 
     def saver_active():
         # True while the map's screensaver is up (stage >= pause threshold).
@@ -286,6 +278,10 @@ def main():
     def emit(text):
         if not text:
             return
+        # Show the transcription even when it goes nowhere: on a device whose
+        # screen freezes during recognition, "it heard this and did nothing" is
+        # the one thing the user cannot otherwise tell from "it heard nothing".
+        publish_state("heard", text, hold=3.0, override=True)
         if args.act and not args.no_wake:
             act(text)
         elif args.no_wake:
@@ -317,7 +313,7 @@ def main():
                 open("/dev/shm/pi-map-pause", "w").close()
             except OSError:
                 pass
-            publish_state("asr")
+            publish_state("asr", hold=120.0, override=True)
             try:
                 text = engine.transcribe(samples, sr)
             finally:
@@ -325,7 +321,7 @@ def main():
                     os.remove("/dev/shm/pi-map-pause")
                 except OSError:
                     pass
-                publish_state("listening")
+                publish_state("listening", override=True)
             if args.debug:
                 print(f"[flush] dur={dur:.1f}s peak={peak:.4f} "
                       f"uttq={utt_q.qsize()} -> '{text}'",

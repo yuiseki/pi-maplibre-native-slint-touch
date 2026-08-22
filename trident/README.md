@@ -96,11 +96,20 @@ journalctl -u pi-hear.service -f      # WAKE / flyto / saver-ignored を確認
   だから「描画はスキップせず再アームだけ止める」=最後の良いフレームが画面に保持される。
 - **screensaver-pause**: 地図が saver stage を `/dev/shm/pi-saver-stage`(0=active, 1/2/3=idle)に
   書き出し、pi-hear は `--saver-pause-stage`(既定1)以上で listening を一時停止する。
-- **mic-state**: pi-hear が `/dev/shm/pi-hear-state` に自分の状態(`listening` / `asr` /
-  `muted` / `paused`)を書き、地図がステータスバーのマイクアイコンの色に使う
-  (灰=誰も聞いていない、緑=待ち受け、黄=処理中)。**ハートビートも兼ねる**ので、
+- **mic-state / caption**: pi-hear が `/dev/shm/pi-hear-state` に **1行目=状態語**
+  (`listening` / `asr` / `heard` / `speaking` / `muted` / `paused`)、**2行目=字幕**を書く。
+  地図はマイクアイコンの色と、画面下の**字幕**に使う。認識中は「認識中...」、
+  終わると**認識できた文字列**、確認音声中はその文言。**認識中は画面が数秒固まる**ので、
+  字幕が唯一の「生きている」証拠であり、空振りしたときに**聞こえなかったのか聞き間違えたのか**を
+  区別できる唯一の手がかりになる。表示の作法は acaption(デスクトップの字幕オーバーレイ)に倣った。
+  **状態には優先度がある**: 取り込みループは毎秒 `listening` を書くので、素直に「最後に書いた者勝ち」に
+  すると認識中は 0.5 秒で消え認識結果は一度も出ない。`hold` を持つ状態がループの更新を退ける
+  (`trident/pi-hear/hear_state.py`、`trident/tests/` にテストあり)。
+  色は 灰=誰も聞いていない / 緑=待ち受け / 黄=処理中。**ハートビートも兼ねる**ので、
   地図は 5 秒古いファイルを「pi-hear が動いていない」と解釈する(=idle とは別物)。
   `--state-file ""` で無効化。
+- **日本語の字幕には CJK フォントが要る**。`fonts-noto-cjk` が無いと豆腐になる
+  (ステータスバーは英数字だけだったので、字幕を足すまで露見しなかった)。
 
 ## スクリーンセーバー連携(アーキテクチャ判断: タッチ起動)
 

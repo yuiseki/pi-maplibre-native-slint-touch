@@ -82,6 +82,14 @@ export component MapWindow inherits Window {
     in property <int> mic-state: 0;   // 0=idle, 1=busy, 2=listening
     in property <image> mic-icon;     // set from C++ (grey/yellow/green PNG)
 
+    // Caption strip: what the voice stack is doing, in words. The screen is
+    // frozen for seconds at a time while the recogniser has the CPU, so this
+    // is the only thing telling the user the device is alive -- and, when a
+    // command goes nowhere, whether it misheard or heard nothing at all.
+    // Empty hides it. Styling follows acaption (the desktop caption overlay).
+    in property <string> caption-text: "";
+    in property <bool> caption-busy: false;
+
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
     // would otherwise consume Up/Down as zoom). Unhandled keys from other widgets
@@ -308,6 +316,33 @@ export component MapWindow inherits Window {
                     min-height: 56px;
                     text: "-";
                     clicked => { MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, 1); }
+                }
+            }
+
+            // Caption strip, above the bottom-left toggle and clear of the
+            // right-edge zoom column. Display-only (no TouchArea), so it stays
+            // transparent to taps meant for the map underneath.
+            Rectangle {
+                x: 24px;
+                y: parent.height - 152px;
+                width: parent.width - 152px;
+                height: 44px;
+                visible: root.caption-text != "";
+                background: #05070ee0;
+                border-width: 1px;
+                border-color: #1e306461;
+                border-radius: 6px;
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: 100%;
+                    text: root.caption-text;
+                    // Dim while working, bright once there is something to read.
+                    color: root.caption-busy ? #4a6090 : #b8cce8;
+                    font-size: 20px;
+                    overflow: elide;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
 
