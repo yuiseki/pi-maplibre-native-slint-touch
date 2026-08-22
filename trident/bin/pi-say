@@ -22,15 +22,29 @@
 set -u
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 
+# What the machine's speaker needs is a property of the speaker, so it lives
+# with the machine rather than in every caller: /etc/default/pi-say sets the
+# device and, if that device is Bluetooth, the format and lead-in it wants. A
+# wired sink needs none of it, and switching between them is this one file
+# instead of an edit to whatever service happens to be speaking.
+# Environment overrides the file; command-line flags override both.
+CONF="${PI_SAY_CONF:-/etc/default/pi-say}"
+env_dev="${PI_SAY_DEVICE:-}"
+env_rate="${PI_SAY_RATE:-}"
+env_ch="${PI_SAY_CHANNELS:-}"
+env_lead="${PI_SAY_LEAD_MS:-}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
 PIPER="${PIPER_BIN:-$HOME/piper-tts/piper/bin/piper}"
 CACHE_DIR="${PI_SAY_CACHE_DIR:-$HOME/piper-tts/say-cache}"
 MODEL="tsukuyomi"
 RATE="1.25"            # length_scale: higher = slower / more relaxed
-DEV="${PI_SAY_DEVICE:-plughw:0,0}"   # 3.5mm jack (card 0); btspk_raw on a Pi 5
-OUT_RATE="${PI_SAY_RATE:-}"          # resample the cached WAV to this (Hz)
-OUT_CH="${PI_SAY_CHANNELS:-}"        # ...and to this many channels
-LEAD_MS="${PI_SAY_LEAD_MS:-}"        # silent lead-in, to cover a sleepy amp
-NO_PLAY=""                           # --no-play: fill the cache, stay silent
+DEV="${env_dev:-${PI_SAY_DEVICE:-plughw:0,0}}"   # 3.5mm jack unless told otherwise
+OUT_RATE="${env_rate:-${PI_SAY_RATE:-}}"         # resample the cached WAV to this (Hz)
+OUT_CH="${env_ch:-${PI_SAY_CHANNELS:-}}"         # ...and to this many channels
+LEAD_MS="${env_lead:-${PI_SAY_LEAD_MS:-}}"       # silent lead-in for a sleepy amp
+NO_PLAY=""                                       # --no-play: cache, stay silent
 TEXT=""
 
 while [ $# -gt 0 ]; do
@@ -42,7 +56,8 @@ while [ $# -gt 0 ]; do
     -h|--help)
       echo "usage: pi-say [--rate N] [--model M] [--device D] \"text\"   (or pipe text via stdin)"
       echo "  --rate N   speech length_scale (default 1.25; bigger = slower)"
-      echo "env: PI_SAY_DEVICE / PI_SAY_RATE / PI_SAY_CHANNELS / PI_SAY_LEAD_MS"
+      echo "conf: /etc/default/pi-say (PI_SAY_DEVICE/RATE/CHANNELS/LEAD_MS)"
+      echo "env: the same names, overriding the file"
       echo "     (resampled and padded into the cache, not at playback)"
       echo "  --no-play  synthesise into the cache and exit without playing"
       exit 0;;

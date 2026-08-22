@@ -1,0 +1,28 @@
+# pi-say: what this machine's speaker needs.  Install to /etc/default/pi-say
+#
+# Everything here is a property of the speaker, not of whoever is speaking, so
+# it lives with the machine instead of in every caller's service unit.
+# Environment variables of the same names override this file; command-line
+# flags override both.
+#
+# The values below are for a Bluetooth speaker, which is what pi5-deck has:
+# a Pi 5 has no 3.5mm jack, and its 3.5" HDMI panel refuses audio outright
+# (aplay: audio open error 524), so Bluetooth is the only way out.
+#
+#   PI_SAY_DEVICE     the A2DP sink with no ALSA conversion in front of it.
+#                     Letting `plug` convert at playback time buzzes audibly,
+#                     whatever rate_converter is configured.
+#   PI_SAY_RATE       what the sink runs at. pi-say resamples into its cache,
+#   PI_SAY_CHANNELS   so playback is a straight copy and nothing converts.
+#   PI_SAY_LEAD_MS    A2DP lets the amp sleep between streams and it takes
+#                     about a second to wake, so without a silent lead-in the
+#                     speaker eats the start of every phrase. Digital silence
+#                     was enough here; a speaker that needs real sound wants a
+#                     quiet tone instead (see pi-say-poi's leading beep).
+#
+# A wired sink wants none of it: set PI_SAY_DEVICE to its ALSA name and leave
+# the rest empty.
+PI_SAY_DEVICE=btspk_raw
+PI_SAY_RATE=48000
+PI_SAY_CHANNELS=2
+PI_SAY_LEAD_MS=1800
