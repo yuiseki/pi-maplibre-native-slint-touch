@@ -865,7 +865,10 @@ int main(int /*argc*/, char** /*argv*/) {
                 const bool have_route = !defroute_if.empty();
                 ns->store(!up ? 0 : (have_route ? 2 : 1));
 
-                // Current SSID for the status bar (truncated to 15 codepoints).
+                // Current SSID for the status bar. Bounded at the 802.11
+                // maximum only; fitting it to the bar is the UI's job (the
+                // label elides), because a codepoint count cannot know where a
+                // proportional font actually runs out of room.
                 std::string ssid;
                 {
                     std::string cmd =
@@ -885,7 +888,7 @@ int main(int /*argc*/, char** /*argv*/) {
                         pclose(fp);
                     }
                     size_t i = 0, cps = 0;
-                    while (i < ssid.size() && cps < 15) {
+                    while (i < ssid.size() && cps < 32) {
                         unsigned char c = (unsigned char)ssid[i];
                         i += (c < 0x80)         ? 1
                              : (c >> 5) == 0x6  ? 2

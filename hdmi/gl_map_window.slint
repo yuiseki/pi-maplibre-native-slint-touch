@@ -200,40 +200,39 @@ export component MapWindow inherits Window {
                     visible: root.kbd-connected;
                     source: root.kbd-icon;
                 }
-                Text {                      // clock, centred in the gap between clusters
-                    x: (parent.width - 60px) / 2;
-                    y: 0px;
-                    width: 60px;
-                    height: 100%;
-                    visible: root.clock-text != "";
-                    text: root.clock-text;
-                    color: white;
-                    font-size: 14px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                // Right cluster, left to right:  [Wi-Fi] SSID  [battery] AC NN%
+                // Right cluster, left to right:  [Wi-Fi] SSID   [battery] AC NN%   HH:MM
+                // Everything here is anchored to the right edge, so the widths
+                // below are what each field is allowed to occupy. The battery
+                // label is left-aligned so it sits against its icon: giving it
+                // a wide right-aligned box instead leaves a gap that reads as a
+                // layout bug.
                 Image {                     // Wi-Fi: grey+red-X=down, yellow=no route, green=ok
-                    x: parent.width - 260px;
+                    x: parent.width - 264px;
                     y: 3px;
                     width: 20px;
                     height: 20px;
                     source: root.wifi-icon;
                 }
                 Text {                      // SSID, just right of the Wi-Fi icon
-                    x: parent.width - 236px;
+                    x: parent.width - 240px;
                     y: 0px;
-                    width: 122px;
+                    // Fixed box so the cluster does not shuffle when the SSID
+                    // changes; `elide` puts an ellipsis on whatever does not
+                    // fit. Eliding by width belongs here rather than in C++,
+                    // which can only count codepoints and would cut a
+                    // proportional font at an arbitrary pixel position.
+                    width: 80px;
                     height: 100%;
                     visible: root.wifi-ssid != "";
                     text: root.wifi-ssid;
+                    overflow: elide;
                     color: white;
                     font-size: 14px;
                     horizontal-alignment: left;
                     vertical-alignment: center;
                 }
                 Image {                     // battery level/charge icon (Icons8)
-                    x: parent.width - 110px;
+                    x: parent.width - 152px;
                     y: 3px;
                     width: 20px;
                     height: 20px;
@@ -241,14 +240,26 @@ export component MapWindow inherits Window {
                     visible: root.battery-percent >= 0;
                     source: root.battery-icon;
                 }
-                Text {                      // battery %, right-aligned at the edge
-                    x: parent.width - 84px;
+                Text {                      // battery %, hard against its icon
+                    x: parent.width - 128px;
                     y: 0px;
-                    width: 76px;
+                    width: 66px;            // widest case: "BAT 100%"
                     height: 100%;
                     visible: root.battery-percent >= 0;
                     text: (root.battery-plugged ? "AC " : "BAT ") + root.battery-percent + "%";
                     color: root.battery-percent <= 20 ? #ff8080 : white;
+                    font-size: 14px;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                }
+                Text {                      // clock, hard against the right edge
+                    x: parent.width - 52px;
+                    y: 0px;
+                    width: 44px;
+                    height: 100%;
+                    visible: root.clock-text != "";
+                    text: root.clock-text;
+                    color: white;
                     font-size: 14px;
                     horizontal-alignment: right;
                     vertical-alignment: center;
