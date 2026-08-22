@@ -62,7 +62,14 @@ cp "$HERE/assets/"* "$WORK/cpp/assets/" 2>/dev/null || true
 # forces the configure when a flag really has to change.
 if [ ! -f "$WORK/build/CMakeCache.txt" ] || [ "${RECONFIGURE:-0}" = "1" ]; then
   echo "== configure (OpenGL backend + FemtoVG GL + libseat linuxkms) =="
+  # OpenGL_GL_PREFERENCE=GLVND: maplibre-native links mbgl-core against
+  # OpenGL::GLX even though we render through EGL/KMS, and CMake's FindOpenGL
+  # only defines that target in GLVND mode. Left at the default (LEGACY) it
+  # picks libGL.so, reports "found components: GLX", defines no OpenGL::GLX,
+  # and the generate step fails. Needs libopengl-dev (libOpenGL.so) plus the
+  # X11/GLX headers -- see README.
   cmake -S "$WORK" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release \
+    -DOpenGL_GL_PREFERENCE=GLVND \
     -DMLN_WITH_OPENGL=ON -DMLN_WITH_WEBGPU=OFF -DMLN_WITH_GLFW=OFF \
     -DSLINT_FEATURE_RENDERER_FEMTOVG=ON -DSLINT_FEATURE_BACKEND_LINUXKMS=ON \
     -DFETCHCONTENT_UPDATES_DISCONNECTED=ON

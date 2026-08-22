@@ -45,6 +45,25 @@ Verified on a Raspberry Pi 4 (Debian 13 / trixie, aarch64, V3D 4.2.14.0) with a
 Run on the build host (aarch64, e.g. a Pi 5). The first build compiles
 maplibre-native from source and takes tens of minutes.
 
+On a minimal install, the build host needs these first:
+
+```bash
+sudo apt install build-essential cmake ninja-build pkg-config git curl \
+  libegl-dev libgles-dev libgl-dev libopengl-dev libgbm-dev libdrm-dev \
+  libinput-dev libxkbcommon-dev libudev-dev libseat-dev seatd \
+  libssl-dev libcurl4-openssl-dev zlib1g-dev libpng-dev libicu-dev \
+  libx11-dev libxext-dev mesa-common-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Slint needs Rust
+```
+
+The X11 packages and `libopengl-dev` are needed even though nothing here uses
+X11: maplibre-native links `mbgl-core` against `OpenGL::GLX`, and CMake's
+`FindOpenGL` only defines that target in GLVND mode (which is why `build.sh`
+passes `-DOpenGL_GL_PREFERENCE=GLVND`). Without them the generate step fails
+with `Target "mbgl-core" links to: OpenGL::GLX but the target was not found`.
+The confusing part is that CMake still prints `found components: GLX` while
+defining no such target; a good configure says `Found OpenGL: .../libOpenGL.so`.
+
 ```bash
 hdmi/scripts/build.sh          # clones maplibre-native-slint, overlays these
                                # sources onto cpp/, builds maplibre-slint-gl
@@ -205,12 +224,18 @@ A small console font helps on the downscaled panel (720x576 -> 480x320):
   DRM master without an X11/Wayland session or an active VT, so this runs over
   ssh on the console. (This is the libseat `linuxkms` backend, not the
   `-noseat` software variant the SPI path uses.)
-- **Display mode**: the MPI3508 only advertises standard HDMI modes (it scales
-  internally to 480x320); a raw 480x320 CVT signal is rejected. Force e.g.
-  `video=HDMI-A-1:720x576@50` in `cmdline.txt` for less downscaling.
+- **Display mode**: these 3.5" panels only advertise standard HDMI modes (they
+  scale internally to 480x320); a raw 480x320 CVT signal is rejected. Force a
+  mode in `cmdline.txt` for less downscaling. On the Osoyoo 3.5" HDMI V2.0,
+  `video=HDMI-A-1:720x480@60` is the one to use: 720x480 is 3:2, the same
+  aspect as the panel, so nothing is squashed. 720x576 is 5:4 and stretches
+  the image vertically.
 - **Touch**: the XPT2046 / ADS7846 resistive controller is single-touch (no
   pinch). Enable `dtparam=spi=on` and `dtoverlay=ads7846,...`, then set a
-  libinput calibration matrix via udev. Double-tap zooms in; zoom out with the
+  libinput calibration matrix via udev. The `by-path` name carries the SoC's
+  SPI address, so it differs per board: `platform-fe204000.spi-cs-1-event` on a
+  Pi 4, `platform-1f00050000.spi-cs-1-event` on a Pi 5. Check yours before
+  setting `MAPLIBRE_INPUT_DEVS`. Double-tap zooms in; zoom out with the
   on-screen zoom buttons / slider. Resistive panels have an edge dead zone, so
   the layout keeps controls inset.
 - maplibre-native renders on the V3D GPU and Slint composites it zero-copy; the
