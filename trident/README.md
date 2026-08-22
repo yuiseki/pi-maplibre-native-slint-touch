@@ -96,6 +96,11 @@ journalctl -u pi-hear.service -f      # WAKE / flyto / saver-ignored を確認
   だから「描画はスキップせず再アームだけ止める」=最後の良いフレームが画面に保持される。
 - **screensaver-pause**: 地図が saver stage を `/dev/shm/pi-saver-stage`(0=active, 1/2/3=idle)に
   書き出し、pi-hear は `--saver-pause-stage`(既定1)以上で listening を一時停止する。
+- **mic-state**: pi-hear が `/dev/shm/pi-hear-state` に自分の状態(`listening` / `asr` /
+  `muted` / `paused`)を書き、地図がステータスバーのマイクアイコンの色に使う
+  (灰=誰も聞いていない、緑=待ち受け、黄=処理中)。**ハートビートも兼ねる**ので、
+  地図は 5 秒古いファイルを「pi-hear が動いていない」と解釈する(=idle とは別物)。
+  `--state-file ""` で無効化。
 
 ## スクリーンセーバー連携(アーキテクチャ判断: タッチ起動)
 
@@ -120,6 +125,36 @@ whisper-base は日本語の**表記**を大きく崩す(札幌→サッポロ/�
 - 依存: `pip install pykakasi`(venv `~/.venv-ahear`)。pi_hear.py の `--act` ウェイク+地名解決は
   これを使う(旧 wake.py の仮名ファジー + 仮名辞書は置換)。**将来の llama 脳に差し替えるまでの、
   軽量で確実な中間解**。
+
+## pi5-deck (Cortex-A76) への移設 — 2026-08-22
+
+pi4-d-hdmi と同じ構成を [[pi5-deck]] にも用意した。**A76 は dotprod(`asimddp`)を持つ**ので、
+pi4(A72)で一番苦しかった推論時間が縮む。ビルドは pi5-deck 上で直接行う(pi4 向けの
+`-mcpu=cortex-a72` と cat パイプ配布は不要)。
+
+| | pi4 (A72) | pi5-deck (A76) |
+|---|---|---|
+| whisper tiny | ~2 秒 | 2 秒 |
+| whisper base | ~4〜5 秒 | **2 秒** |
+| whisper small | ~15〜19 秒 | **8 秒** |
+| piper 合成(定型文) | ~6 秒 | **0.33 秒**(RTF 0.12) |
+
+計測は 2.35 秒の発話 1 本、`-ac 512 -bs 1 -t 4`。**pi4 では非現実的だった small が選択肢に入る**。
+ただし精度比較はまだ。上の数字は piper 合成音声を入力にしており、合成音声は whisper にとって
+分布外なので**認識結果の良し悪しは評価できない**(速度だけが読める)。実マイクで測り直すこと。
+
+**Pi 5 固有の落とし穴**:
+
+- **音声出力が無い**。Pi 5 に 3.5mm ジャックは無く、Osoyoo 3.5" パネルの HDMI は音声を拒否する
+  (`aplay: audio open error: 524`)。USB の C-Media PCM2902 は capture 専用。よって
+  `pi-say` の既定 `plughw:0,0` は使えず、**Bluetooth (bluealsa) が唯一の出力経路**。
+  `bluez-alsa-utils` + HFP-AG override + `~/.asoundrc` の `btspk` を用意し、unit は
+  `--say-device btspk` で起動する。スピーカー未接続なら aplay が黙って失敗するだけで、
+  **pi-say の失敗は flyTo を止めない**(確認音声が出ないだけ)。
+- bluealsa の実行ファイル名はこのバージョンでは `bluealsad` ではなく **`bluealsa`**。
+  override に `bluealsad` と書くと 203/EXEC で起動しない。
+- マイクは C-Media PCM2902 = README の表の CHANGEEK と同型。`plughw:CARD=Device,DEV=0` の
+  arecord 経路がそのまま使える(card 名が `Device` なので unit を書き換えずに済む)。
 
 ## ASR / LLM エンジン比較(pi4 = Cortex-A72, dotprod 無し)での知見
 
