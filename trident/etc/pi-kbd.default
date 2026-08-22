@@ -1,0 +1,18 @@
+# /etc/default/pi-kbd -- what the deck's keyboard is and how hard to quieten the
+# Wi-Fi to reach it. See pi-kbd for why the second part is necessary.
+
+# The keyboard's Bluetooth address.
+PI_KBD_MAC=88:56:A6:C2:CE:8A
+
+# Wi-Fi TX power to hold during a connection attempt, in mBm (100 = 1 dBm).
+# Measured on pi5-deck: 31 dBm gives about a 1.5% chance of the link forming,
+# 1 dBm gives 86%. Raise it if the deck sits far from its access point and the
+# link cannot survive the dip -- the attempt is only a few seconds long.
+PI_KBD_TXPOWER_MBM=100
+
+# The wireless interface whose transmitter shares the antenna with Bluetooth.
+PI_KBD_WIFI=wlan0
+
+# Attempts per pi-kbd connect, and how often `pi-kbd watch` checks.
+PI_KBD_TRIES=6
+PI_KBD_POLL=20

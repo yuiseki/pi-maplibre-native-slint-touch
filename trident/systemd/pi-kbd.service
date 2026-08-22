@@ -1,0 +1,19 @@
+[Unit]
+Description=Keep the CardKB2 keyboard attached to the Pi's own Bluetooth radio
+Documentation=file:/usr/local/bin/pi-kbd
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+# Root: reading the controller's connection list and moving Wi-Fi TX power both
+# want privileges, and this has to work before anyone can log in -- the whole
+# point is that the keyboard is how you log in.
+User=root
+EnvironmentFile=-/etc/default/pi-kbd
+ExecStart=/usr/local/bin/pi-kbd watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

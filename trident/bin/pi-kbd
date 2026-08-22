@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# pi-kbd: bring up the CardKB2 Bluetooth keyboard on the Pi's own radio.
+#
+#   pi-kbd              show what the keyboard is attached to right now
+#   pi-kbd connect      connect it on the onboard controller
+#   pi-kbd disconnect
+#   pi-kbd present      exit 0 if the keyboard is usable on the onboard controller
+#   pi-kbd watch        keep it connected (what the service runs)
+#
+# Why this exists, measured on pi5-deck 2026-08-22:
+#
+# The Pi's onboard CYW43455 puts Wi-Fi and Bluetooth behind one antenna. With
+# Wi-Fi associated on 2.4 GHz at full power, a BLE *connection attempt* to the
+# keyboard fails about 99% of the time -- the controller reports "Connection
+# Failed to be Established" (0x3e) roughly 340 ms in, which is the six-connection
+# -event window after CONNECT_IND with nothing heard back.
+#
+# It is desense, not arbitration: rewriting btc_mode in the Wi-Fi firmware's
+# nvram (0, 1, 2) changed nothing, while dropping Wi-Fi TX power from 31 dBm to
+# 1 dBm took the same measurement from 1.5% to 86% -- with Wi-Fi still associated
+# and passing traffic. The Wi-Fi transmitter simply drowns the receiver sitting
+# next to it.
+#
+# And it is only the *attempt* that is fragile. Once established, the link ran
+# 180 s at full Wi-Fi power with zero disconnects. So there is no need to take
+# the network down: quieten the transmitter for the few seconds the handshake
+# needs, then put it back. The network never drops.
+set -u
+
+CONF="${PI_KBD_CONF:-/etc/default/pi-kbd}"
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+MAC="${PI_KBD_MAC:-88:56:A6:C2:CE:8A}"          # CardKB2-CE8A
+ADAPTER="${PI_KBD_ADAPTER:-}"                    # onboard controller; autodetected
+WIFI="${PI_KBD_WIFI:-wlan0}"
+TXPOWER_MBM="${PI_KBD_TXPOWER_MBM:-100}"         # 1 dBm, in mBm as iw wants it
+TRIES="${PI_KBD_TRIES:-6}"
+DEVICES="${PI_KBD_INPUT_DEVICES:-/proc/bus/input/devices}"
+IW="${PI_KBD_IW:-/usr/sbin/iw}"
+BTCTL="${PI_KBD_BTCTL:-bluetoothctl}"
+HCITOOL="${PI_KBD_HCITOOL:-hcitool}"
+
+SUDO=""
+[ "$(id -u)" != "0" ] && SUDO="sudo -n"
+SUDO="${PI_KBD_SUDO-$SUDO}"
+DRY=""
+
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+# The onboard radio is the UART one; a USB dongle, if present, is not it. Being
+# explicit matters because the keyboard can be bonded to both at once, and a node
+# hanging off the dongle would otherwise read as success for the very thing we
+# are trying to do without it.
+onboard_adapter() {
+    [ -n "$ADAPTER" ] && { lower "$ADAPTER"; return; }
+    # sysfs has no address file for Bluetooth controllers, so ask hciconfig,
+    # which reports the bus alongside it. PI_KBD_HCICONFIG_OUT lets a test feed
+    # a captured listing instead of the machine's own.
+    local src
+    if [ -n "${PI_KBD_HCICONFIG_OUT:-}" ]; then
+        src="$(cat "$PI_KBD_HCICONFIG_OUT")"
+    else
+        src="$(hciconfig 2>/dev/null)"
+    fi
+    printf '%s\n' "$src" | awk '
+        /^hci[0-9]+:/ { bus=""; sub(/:.*/, "", $1); dev=$1
+                        if (match($0, /Bus: [A-Za-z]+/)) bus=substr($0, RSTART+5, RLENGTH-5) }
+        /BD Address:/ { if (bus != "" && bus != "USB") { print $3; exit } }
+    ' | tr 'A-Z' 'a-z'
+}
+
+# The same listing, but the hciN name -- hcitool wants that rather than an address.
+onboard_dev() {
+    [ -n "${PI_KBD_DEV:-}" ] && { printf '%s\n' "$PI_KBD_DEV"; return; }
+    local src
+    if [ -n "${PI_KBD_HCICONFIG_OUT:-}" ]; then
+        src="$(cat "$PI_KBD_HCICONFIG_OUT")"
+    else
+        src="$(hciconfig 2>/dev/null)"
+    fi
+    printf '%s\n' "$src" | awk '
+        /^hci[0-9]+:/ { bus=""; dev=$1; sub(/:$/, "", dev)
+                        if (match($0, /Bus: [A-Za-z]+/)) bus=substr($0, RSTART+5, RLENGTH-5) }
+        /BD Address:/ { if (bus != "" && bus != "USB") { print dev; exit } }
+    '
+}
+
+# A HID node bound to our MAC on that controller is necessary but not sufficient:
+# BlueZ keeps the uhid device registered across a disconnect so it can rebind,
+# so the node outlives the link (measured -- "Disconnection successful" and the
+# node still there five seconds later).
+node_for() {
+    local want_phys want_uniq
+    want_phys="$(lower "$1")"
+    want_uniq="$(lower "$MAC")"
+    awk -v phys="$want_phys" -v uniq="$want_uniq" '
+        function reset() { p=""; u=""; h="" }
+        function emit() { if (!found && p==phys && u==uniq) { found=1; print h } }
+        BEGIN { reset(); found=0 }
+        /^P: Phys=/  { p=tolower(substr($0,9)) }
+        /^U: Uniq=/  { u=tolower(substr($0,9)) }
+        /^H: Handlers=/ { h=substr($0,13) }
+        /^$/ { emit(); reset() }
+        END  { emit() }
+    ' "$DEVICES"
+}
+
+any_node() {
+    local want_uniq
+    want_uniq="$(lower "$MAC")"
+    awk -v uniq="$want_uniq" '
+        function reset() { p=""; u="" }
+        function emit() { if (u==uniq && p!="") { print p; seen[p]=1 } }
+        BEGIN { reset() }
+        /^P: Phys=/ { p=tolower(substr($0,9)) }
+        /^U: Uniq=/ { u=tolower(substr($0,9)) }
+        /^$/ { emit(); reset() }
+        END  { if (!(p in seen)) emit() }
+    ' "$DEVICES"
+}
+
+# ...and BlueZ's Connected property is not sufficient either. It is set from LE
+# Connection Complete, which the controller raises the instant CONNECT_IND goes
+# out, before the peripheral has answered: on pi5-deck it read "Connected: yes"
+# 6 times out of 6 in a run whose link layer established zero times. It is also
+# reported for whichever controller happens to be the default, which is the
+# wrong one here by construction.
+#
+# The kernel's own connection list for a named controller has neither problem,
+# and a failed attempt drops out of it the moment the 0x3e arrives. What is left
+# is telling a real link from the flapping of a retry storm, and that is just
+# time: ask repeatedly and insist on every answer.
+linked() {
+    local dev="$1" n="${PI_KBD_SETTLE:-5}" i want
+    want="$(lower "$MAC")"
+    [ -n "$dev" ] || return 1
+    for i in $(seq 1 "$n"); do
+        $SUDO $HCITOOL -i "$dev" con 2>/dev/null | tr 'A-Z' 'a-z' | grep -q "$want" || return 1
+        [ "$i" -lt "$n" ] && sleep 1
+    done
+    return 0
+}
+
+bt() {
+    # Feed bluetoothctl a script with stdin held open long enough for it to act.
+    # The hold matters: bluetoothctl exiting cancels a connect still in flight,
+    # and this one needs several seconds of retrying to land.
+    local adapter="$1" hold="${PI_KBD_HOLD:-10}"; shift
+    { echo "select $adapter"; sleep 1; for c in "$@"; do echo "$c"; sleep "$hold"; done; } \
+        | $BTCTL 2>/dev/null | tr -d '\r'
+}
+
+do_status() {
+    local adapter phys
+    adapter="$(onboard_adapter)"
+    echo "keyboard : $MAC"
+    echo "onboard  : ${adapter:-<none found>}"
+    if [ -n "$adapter" ] && [ -n "$(node_for "$adapter")" ]; then
+        if linked "$(onboard_dev)"; then
+            echo "attached : yes, on the onboard controller"
+            echo "input    : $(node_for "$adapter")"
+            return 0
+        fi
+        echo "attached : no (bound to the onboard controller but the link is down)"
+        return 1
+    fi
+    phys="$(any_node | head -1)"
+    if [ -n "$phys" ]; then
+        echo "attached : yes, but via $phys (not the onboard controller)"
+        return 1
+    fi
+    echo "attached : no"
+    return 1
+}
+
+do_present() {
+    local adapter
+    adapter="$(onboard_adapter)"
+    [ -n "$adapter" ] || return 1
+    [ -n "$(node_for "$adapter")" ] || return 1
+    linked "$(onboard_dev)"
+}
+
+say() { [ -n "$DRY" ] && echo "would run: $*" || return 0; }
+
+run() {
+    if [ -n "$DRY" ]; then echo "would run: $*"; return 0; fi
+    "$@"
+}
+
+# Same, for commands whose own chatter is not interesting.
+run_quiet() {
+    if [ -n "$DRY" ]; then echo "would run: $*"; return 0; fi
+    "$@" >/dev/null 2>&1
+}
+
+do_connect() {
+    local adapter i
+    adapter="$(onboard_adapter)"
+    if [ -z "$adapter" ]; then echo "pi-kbd: no onboard controller found" >&2; return 1; fi
+    if do_present; then
+        echo "already attached on $adapter"
+        return 0
+    fi
+
+    # Arm the restore before touching the transmitter, the same way pi-net arms
+    # a reconnect before disconnecting: if this process is killed between the two
+    # steps, the deck must not be left on a 1 dBm Wi-Fi link.
+    run_quiet $SUDO systemd-run --on-active=120 --unit=pi-kbd-txrestore --collect \
+        "$IW" dev "$WIFI" set txpower auto \
+        || { echo "pi-kbd: could not arm the txpower restore; not touching Wi-Fi" >&2; return 1; }
+
+    run $SUDO "$IW" dev "$WIFI" set txpower fixed "$TXPOWER_MBM"
+
+    local ok=1
+    for i in $(seq 1 "$TRIES"); do
+        if [ -n "$DRY" ]; then echo "would run: bluetoothctl connect $MAC (try $i)"; break; fi
+        bt "$adapter" "connect $MAC" >/dev/null
+        sleep 2
+        if do_present; then ok=0; echo "attached after $i attempt(s)"; break; fi
+    done
+
+    run $SUDO "$IW" dev "$WIFI" set txpower auto
+    run_quiet $SUDO systemctl stop pi-kbd-txrestore.timer || true
+
+    [ -n "$DRY" ] && return 0
+    [ "$ok" = 0 ] || echo "pi-kbd: gave up after $TRIES attempts" >&2
+    return "$ok"
+}
+
+do_disconnect() {
+    local adapter
+    adapter="$(onboard_adapter)"
+    bt "$adapter" "disconnect $MAC" >/dev/null
+    do_status
+}
+
+# The keyboard drops the link when it sleeps, and reconnecting hits the same
+# fragile handshake -- so the recovery has to be automatic, not a thing the user
+# discovers they need a keyboard to fix.
+do_watch() {
+    while true; do
+        do_present || do_connect >/dev/null 2>&1
+        sleep "${PI_KBD_POLL:-20}"
+    done
+}
+
+CMD="${1:-status}"
+[ $# -gt 0 ] && shift
+for a in "$@"; do
+    case "$a" in
+        --dry-run) DRY=1;;
+        --tries) :;;
+    esac
+done
+
+case "$CMD" in
+    status)     do_status;;
+    dev)        onboard_dev;;
+    present)    do_present;;
+    connect)    do_connect;;
+    disconnect) do_disconnect;;
+    watch)      do_watch;;
+    -h|--help)
+        sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0;;
+    *)
+        echo "usage: pi-kbd [status|connect|disconnect|present|watch|dev] [--dry-run]" >&2
+        exit 2;;
+esac
