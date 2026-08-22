@@ -1,0 +1,37 @@
+[Unit]
+Description=Resident llama.cpp for reading spoken intents
+Documentation=file:/home/yuiseki/src/pi-hear/intent.py
+After=network.target
+
+[Service]
+Type=simple
+User=yuiseki
+EnvironmentFile=-/etc/default/llama-intent
+# Resident because the cost of not being resident is mostly startup. Measured
+# on pi5-deck with Qwen2.5-0.5B: the command-line tool takes 5.6 s per call, of
+# which ~2.2 s is loading the model and ~2.6 s is evaluating a prompt that is
+# identical every time. As a server, with the prefix cached, the same call is
+# 0.43 s -- and that is the difference between a model that can sit inside the
+# voice loop and one that cannot.
+#
+# 0.5B rather than 1.5B, deliberately. 1.5B answers 4 of 6 test sentences
+# correctly against 0.5B's 2, but costs 917 MB against 287 MB, and on a 4 GB
+# machine that comes out of the page cache holding 700 GB of Overpass and
+# Nominatim. Paying for the model with the thing that makes place lookups
+# answer in 40 ms is the wrong trade. The grammar recovers part of the gap by
+# making malformed answers unrepresentable.
+ExecStart=/home/yuiseki/src/llama.cpp/build/bin/llama-server \
+  --model ${LLAMA_INTENT_MODEL} \
+  --ctx-size ${LLAMA_INTENT_CTX} \
+  --threads ${LLAMA_INTENT_THREADS} \
+  --host 127.0.0.1 --port ${LLAMA_INTENT_PORT} \
+  --no-warmup
+Restart=on-failure
+RestartSec=10
+# It is a convenience, not the point of the machine: everything else should get
+# CPU first, and the map in particular must keep its frame rate.
+Nice=10
+CPUWeight=20
+
+[Install]
+WantedBy=multi-user.target

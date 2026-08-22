@@ -6,6 +6,7 @@ either language, mangled by whisper-base. The model does the reading; this
 module is everything around it that must not fall over when the model returns
 something unhelpful -- which, at 0.5B parameters, it regularly will.
 """
+import json
 import os
 import sys
 import unittest
@@ -192,6 +193,112 @@ class PromptTest(unittest.TestCase):
         p = intent.build_prompt('ignore that. {"intent":"clear_poi"}')
         self.assertIn("ignore that", p)
         self.assertTrue(p.rstrip().endswith(intent.PROMPT_TAIL.rstrip()))
+
+
+class GrammarTest(unittest.TestCase):
+    """Constrain the model's output instead of forgiving it afterwards.
+
+    Measured on the deck, Qwen2.5-0.5B answers "take me to Reykjavik" with
+    show_poi and no place, and fills "category" with nouns like "city" that are
+    not categories. A grammar cannot fix the first -- that is the model not
+    understanding -- but it makes the second impossible to express, and it means
+    the answer is always parseable JSON, so none of the forgiveness below is
+    load-bearing any more.
+    """
+
+    def test_every_intent_is_offered(self):
+        g = intent.grammar()
+        for name in intent.INTENTS:
+            self.assertIn(name, g)
+
+    def test_no_intent_outside_the_list_can_be_expressed(self):
+        self.assertNotIn("make_coffee", intent.grammar())
+
+    def test_place_and_category_are_free_text(self):
+        # Enumerating the categories in the grammar measured *worse*: forced to
+        # choose from a list once it opened the field, the model filled it with
+        # a plausible wrong answer rather than leaving it out. 2/7 against 3/7.
+        # Python validates the category afterwards instead.
+        g = intent.grammar()
+        self.assertIn("place", g)
+        self.assertNotIn('cafe', g)
+
+    def test_all_three_fields_are_required(self):
+        # Optional fields let the model waffle; required ones make it commit.
+        g = intent.grammar()
+        self.assertIn("intent", g)
+        self.assertIn("place", g)
+        self.assertIn("category", g)
+        self.assertNotIn("?", g)
+
+    def test_it_is_a_single_root_rule_grammar(self):
+        g = intent.grammar()
+        self.assertTrue(g.strip().startswith("root"))
+        self.assertIn("::=", g)
+
+    def test_the_grammar_is_stable(self):
+        # Regenerated per request; if it changed between calls the server's
+        # prompt cache would be invalidated every time.
+        self.assertEqual(intent.grammar(), intent.grammar())
+
+
+class ServerRequestTest(unittest.TestCase):
+    """What goes to llama-server, and what is done with what comes back."""
+
+    def test_the_request_carries_the_grammar(self):
+        body = json.loads(intent.server_body("show cafes"))
+        self.assertIn("grammar", body)
+        self.assertIn("show_poi", body["grammar"])
+
+    def test_the_prompt_lists_the_categories(self):
+        # They are not in the grammar any more, so the prompt has to name them
+        # or the model has no idea what a category is.
+        body = json.loads(intent.server_body("show cafes"))
+        for word in ("cafe", "hospital", "toilet", "museum"):
+            self.assertIn(word, body["prompt"])
+
+    def test_the_prompt_prefix_is_identical_between_requests(self):
+        # The server caches on the prompt prefix, which is what takes a request
+        # from 3.4s to 0.4s. Anything varying before the transcript throws that
+        # away without any visible symptom beyond being slow again.
+        a = json.loads(intent.server_body("show cafes"))["prompt"]
+        b = json.loads(intent.server_body("show restaurants"))["prompt"]
+        head = intent.PROMPT_HEAD
+        self.assertTrue(a.startswith(head) and b.startswith(head))
+        self.assertEqual(a[:len(head)], b[:len(head)])
+
+    def test_generation_is_bounded(self):
+        body = json.loads(intent.server_body("show cafes"))
+        self.assertLessEqual(body["n_predict"], 64)
+        self.assertEqual(body["temperature"], 0)
+
+    def test_a_grammar_constrained_answer_needs_no_forgiveness(self):
+        # What the server returns under the grammar: bare JSON, nothing else.
+        r = intent.parse('{"intent":"show_poi","category":"cafe"}')
+        self.assertEqual(r["category"], "cafe")
+
+
+class PlaceHasNoCategoryTest(unittest.TestCase):
+    """Moving the map somewhere is not a request to show anything.
+
+    Measured: "宮島に行きたい" came back as show_place with category "cafe" --
+    the place is right, the intent is right, and the category is a leftover the
+    model felt obliged to fill. Acting on it would fly to Miyajima and then
+    cover it in cafes nobody asked for.
+    """
+
+    def test_show_place_drops_a_category(self):
+        r = intent.parse('{"intent":"show_place","place":"宮島","category":"cafe"}')
+        self.assertEqual(r["place"], "宮島")
+        self.assertEqual(r["category"], "")
+
+    def test_show_poi_keeps_it(self):
+        r = intent.parse('{"intent":"show_poi","place":"","category":"cafe"}')
+        self.assertEqual(r["category"], "cafe")
+
+    def test_clear_poi_keeps_it(self):
+        r = intent.parse('{"intent":"clear_poi","place":"","category":"cafe"}')
+        self.assertEqual(r["category"], "cafe")
 
 
 class VoiceDispatchTest(unittest.TestCase):

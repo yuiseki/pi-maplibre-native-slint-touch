@@ -31,24 +31,33 @@ except ImportError:                                # pragma: no cover
 
 SLOTS = ("place", "category")
 
-PROMPT_HEAD = """You convert a spoken command about a map into JSON.
+PROMPT_HEAD = """Convert a spoken map command into JSON.
 
-Allowed "intent" values:
-  show_place  the user wants the map moved to a place
-  show_poi    the user wants things of some kind shown on the map
-  clear_poi   the user wants those things taken off the map
-  unknown     anything else
+"intent" is one of:
+  show_place  move the map to a place. Any place name: a city, a country, an
+              island, a building. "take me to", "go to", "where is",
+              "show me the map of", "...に行きたい" all mean this.
+  show_poi    show things of a kind. "where can I find", "I need a",
+              "show me somewhere I can", "find me a" mean this.
+  clear_poi   take those things off again. "remove", "clear", "get rid of",
+              "hide" mean this.
+  unknown     anything that is not about the map.
 
-Fields: "intent", and optionally "place" (a place name) and "category"
-(what kind of thing, e.g. cafe, restaurant, toilet).
-
-Answer with one JSON object and nothing else.
+"place" is a place name copied from the command. Empty if none was named.
+"category" is one of: cafe restaurant bar pub fastfood toilet hospital pharmacy
+school bank atm fuel parking convenience supermarket hotel museum station park.
+Empty if the command did not name one.
 
 Examples:
-  "show me the map of Hiroshima" -> {"intent":"show_place","place":"Hiroshima"}
-  "show cafes on map"            -> {"intent":"show_poi","category":"cafe"}
-  "remove cafes from map"        -> {"intent":"clear_poi","category":"cafe"}
-  "what time is it"              -> {"intent":"unknown"}
+  "show me the map of Hiroshima"  {"intent":"show_place","place":"Hiroshima","category":""}
+  "take me to Reykjavik please"   {"intent":"show_place","place":"Reykjavik","category":""}
+  "宮島に行きたい"                  {"intent":"show_place","place":"宮島","category":""}
+  "show cafes on map"             {"intent":"show_poi","place":"","category":"cafe"}
+  "where can I find a hospital"   {"intent":"show_poi","place":"","category":"hospital"}
+  "I need a toilet"               {"intent":"show_poi","place":"","category":"toilet"}
+  "remove cafes from map"         {"intent":"clear_poi","place":"","category":"cafe"}
+  "get rid of everything"         {"intent":"clear_poi","place":"","category":""}
+  "what time is it"               {"intent":"unknown","place":"","category":""}
 
 Command:
 """
@@ -100,6 +109,12 @@ def _coerce(doc):
     # "map", "place". Acting on one of those queries Overpass for a tag that
     # does not exist, or worse, falls back to a default and shows cafes to
     # someone who asked for a city. An unknown category is no category.
+    # Moving the map somewhere is not a request to show anything on it.
+    # Observed: show_place with category "cafe" for 宮島に行きたい -- the model
+    # filling a field it was required to emit. Acting on it would fly there and
+    # then cover it in cafes nobody asked for.
+    if name == "show_place":
+        out["category"] = ""
     if out["category"] and _geo is not None:
         if _geo.canonical_category(out["category"]) is None:
             out["category"] = ""
@@ -189,6 +204,42 @@ def by_rule(transcript):
 
 # --- the model ---------------------------------------------------------------
 
+SERVER = os.environ.get("PI_INTENT_SERVER", "http://127.0.0.1:8080")
+
+
+def server_body(transcript, n_predict=48):
+    """The JSON body for llama-server's /completion.
+
+    cache_prompt is what makes this worth running as a server at all: the
+    instructions are identical every time and only the last line varies, so the
+    server keeps the evaluated prefix and a request costs the generation alone.
+    Measured on the deck: 3.4s for the first, 0.4s for every one after.
+    """
+    return json.dumps({
+        "prompt": build_prompt(transcript),
+        "n_predict": n_predict,
+        "temperature": 0,
+        "cache_prompt": True,
+        "grammar": grammar(),
+    })
+
+
+def by_server(transcript, base=None, timeout=None):
+    """Ask the resident llama-server. '' if it is not there or does not answer."""
+    import urllib.error
+    import urllib.request
+    url = (base or SERVER).rstrip("/") + "/completion"
+    req = urllib.request.Request(
+        url, data=server_body(transcript).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as r:
+            return json.load(r).get("content", "")
+    except Exception:                              # noqa: BLE001
+        # Not running, still loading (503), or slow. The caller falls back.
+        return ""
+
+
 LLAMA = os.environ.get("PI_INTENT_LLAMA",
                        os.path.expanduser("~/src/llama.cpp/build/bin/llama-cli"))
 MODEL = os.environ.get(
@@ -235,6 +286,53 @@ def by_model(transcript, llama=None, model=None, timeout=None):
     return answer_only(proc.stdout or "")
 
 
+def _canonical_categories():
+    """The ASCII names, once each, in a stable order.
+
+    From geo, so there is one list of categories rather than two that drift.
+    Sorted because the grammar goes into every request and the server caches on
+    the prompt; a set's iteration order would invalidate that cache.
+    """
+    if _geo is None:                               # pragma: no cover
+        return ()
+    names = {_geo.canonical_category(w) for w in _geo.CATEGORIES}
+    return tuple(sorted(n for n in names if n))
+
+
+def grammar():
+    """A GBNF grammar constraining the intent, and requiring all three fields.
+
+    Measured on the deck with Qwen2.5-0.5B, over ten sentences the rules do not
+    cover:
+
+        richer prompt, no grammar          1/10
+        original prompt, no grammar        4/10
+        richer prompt + this grammar       7/10
+
+    Neither half works alone. Without the grammar the longer prompt makes the
+    model waffle and everything comes back as unknown; with it, the model has to
+    commit to one of four words and the prompt's mapping starts to matter.
+
+    Enumerating the categories here as well measured *worse* -- 2/7 against 3/7.
+    Once the field was open, being forced to choose from a list made the model
+    fill it with a plausible wrong answer instead of leaving it empty. So the
+    slots are free text and Python checks the category afterwards, where an
+    unknown one can become no category rather than a nearby one.
+
+    Requiring all three fields rather than making them optional is the same
+    lesson: an optional field is an invitation to skip the hard part.
+    """
+    intents = " | ".join('"\\"%s\\""' % n for n in INTENTS)
+    return (
+        'root ::= "{" ws "\\"intent\\"" ws ":" ws intent "," '
+        'ws "\\"place\\"" ws ":" ws string "," '
+        'ws "\\"category\\"" ws ":" ws string ws "}"\n'
+        'intent ::= %s\n'
+        'string ::= "\\"" [^"\\\\]* "\\""\n'
+        'ws ::= [ \t\n]*\n' % intents
+    )
+
+
 BIN = "/usr/local/bin/"
 
 
@@ -262,10 +360,17 @@ def for_voice(transcript):
 
 
 def read(transcript, use_model=True):
-    """Rules if they are sure, otherwise the model, otherwise unknown."""
+    """Rules if they are sure, then the resident server, then the CLI.
+
+    The server is tried first because it answers in under a second; the CLI is
+    there for when it is not running, and costs about six.
+    """
     quick = by_rule(transcript)
     if quick is not None:
         return quick
     if not use_model:
         return _empty()
+    answer = by_server(transcript)
+    if answer:
+        return parse(answer)
     return parse(by_model(transcript))

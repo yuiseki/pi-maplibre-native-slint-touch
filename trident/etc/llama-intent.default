@@ -1,0 +1,16 @@
+# /etc/default/llama-intent
+
+# 0.5B, not 1.5B. See the note in the unit: the bigger model is more accurate
+# and costs 917 MB against 287 MB, which on this machine is taken out of the
+# page cache that makes Overpass and Nominatim fast.
+LLAMA_INTENT_MODEL=/home/yuiseki/src/llama.cpp/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+
+# The prompt is about 230 tokens and the answer under 50. 1024 leaves room for
+# a long transcript without paying for a KV cache nobody uses.
+LLAMA_INTENT_CTX=1024
+
+# Three of four cores. The fourth is left for the map, which shares this
+# machine and is the thing a person is looking at.
+LLAMA_INTENT_THREADS=3
+
+LLAMA_INTENT_PORT=8080
