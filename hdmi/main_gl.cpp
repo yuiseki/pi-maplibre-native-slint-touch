@@ -197,6 +197,50 @@ static bool read_hear_state(std::string& word, std::string& text) {
     return true;
 }
 
+// Current input level, 0..1, as pi-hear last measured it. Stale means nobody
+// is capturing, which must read as silence rather than as the last thing heard.
+static float read_hear_level() {
+    struct stat st {};
+    if (::stat("/dev/shm/pi-hear-level", &st) != 0)
+        return 0.f;
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    if (now - static_cast<int64_t>(st.st_mtim.tv_sec) >= 2)
+        return 0.f;
+    std::ifstream f("/dev/shm/pi-hear-level");
+    float v = 0.f;
+    if (!(f >> v))
+        return 0.f;
+    return v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+}
+
+// A stylised waveform, in a 0..100 viewbox, from a single level. Lifted from
+// acaption's canvas visualiser so the deck and the desktop overlay move the
+// same way: two out-of-phase components rather than a clean sine (a clean one
+// reads as a test signal), tapered at both ends, travelling left to right.
+static std::string wave_commands(float level, double t) {
+    constexpr int POINTS = 48;
+    std::string out;
+    out.reserve(POINTS * 16);
+    char buf[64];
+    for (int i = 0; i < POINTS; ++i) {
+        const double x = 100.0 * i / (POINTS - 1);
+        const double phase = i * 0.9 + t * 9.0;
+        const double envelope =
+            0.25 + 0.75 * std::sin((double)i / POINTS * M_PI);
+        const double wiggle =
+            std::sin(phase) * 0.3 + std::sin(phase * 0.37 + 1.2) * 0.2;
+        // The floor keeps a living line under silence: a wave that goes
+        // perfectly flat is indistinguishable from a UI that has died.
+        const double amp = std::max(0.05, level * 2.2);
+        const double y = 50.0 + wiggle * envelope * amp * 38.0;
+        std::snprintf(buf, sizeof buf, "%c %.1f %.1f ", i ? 'L' : 'M', x, y);
+        out += buf;
+    }
+    return out;
+}
+
 static int64_t env_secs(const char* key, int64_t def) {
     if (const char* e = std::getenv(key)) {
         if (e[0] != '\0') {
@@ -1058,6 +1102,8 @@ int main(int /*argc*/, char** /*argv*/) {
         char clock[6] = "";             // last "HH:MM" pushed to the UI
         int cap_tick = 0;               // drives the working animation's dots
         std::string cap_word, cap_text; // last caption pushed (change gate)
+        float wave_level = 0.f;         // smoothed input level for the wave
+        int voice_stage = 0;            // 0 idle, 1 armed, 2 thinking
         float la_pitch = 1e9f;          // last applied pitch/bearing (change gate)
         float la_bearing = 1e9f;
         double la_lat = 1e9, la_lon = 1e9;   // last applied GPS centre (change gate)
@@ -1116,21 +1162,35 @@ int main(int /*argc*/, char** /*argv*/) {
             // That matters because recognition deliberately freezes the map to
             // hand whisper the CPU: an indicator that re-armed the render loop
             // at 60 fps would claw back the very cycles it is reporting on.
+            ++ss->cap_tick;
             bool cap_busy = false;
-            if (++ss->cap_tick % 4 == 0) {
+            if (ss->cap_tick % 4 == 0) {
                 std::string word, text, caption;
+                int stage = 0;
                 if (read_hear_state(word, text)) {
-                    if (word == "asr") {
+                    // "heard" carries the transcription, which is deliberately
+                    // not shown: it is usually mangled, it is unreadable at
+                    // this size, and it is the machine's business rather than
+                    // the reader's -- the journal still has it. Visually it
+                    // stays "thinking", because the device is still deciding
+                    // and acting; blanking here would flash an empty box
+                    // between thinking and the reply.
+                    if (word == "asr" || word == "heard") {
                         cap_busy = true;
+                        stage = 2;
                         static const char* DOTS[4] = {"", ".", "..", "..."};
-                        caption = std::string("認識中") +
+                        caption = std::string("考え中") +
                                   DOTS[(ss->cap_tick / 4) % 4];
+                    } else if (word == "armed") {
+                        stage = 1;
+                        caption = "お話しください";
+                        cap_busy = true;
                     } else if (word == "speaking") {
-                        caption = text;
-                    } else if (word == "heard") {
                         caption = text;
                     }
                 }
+                ss->voice_stage = stage;
+                win->set_voice_stage(stage);
                 if (word != ss->cap_word || caption != ss->cap_text) {
                     ss->cap_word = word;
                     ss->cap_text = caption;
@@ -1142,6 +1202,30 @@ int main(int /*argc*/, char** /*argv*/) {
                     if (map_render_paused())
                         win->window().request_redraw();
                 }
+            }
+
+            // The waveform only runs while armed, which is also the only time
+            // the recogniser is not holding the CPU -- so the expensive-looking
+            // half of this UI happens exactly when there is room for it, and
+            // the thinking animation, which runs when there is not, is four
+            // text updates a second.
+            if (ss->voice_stage == 1) {
+                const float target = read_hear_level();
+                // Same follow constant as acaption: fast enough to feel live,
+                // slow enough that a single loud block does not snap the wave.
+                ss->wave_level += (target - ss->wave_level) * 0.35f;
+                const double t =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count() /
+                    1000.0;
+                win->set_wave_path(slint::SharedString(
+                    wave_commands(ss->wave_level, t).c_str()));
+                float pulse = ss->wave_level * 1.8f;
+                win->set_wave_pulse(pulse > 1.f ? 1.f : pulse);
+            } else if (ss->wave_level != 0.f) {
+                ss->wave_level = 0.f;
+                win->set_wave_pulse(0.f);
             }
 
             win->set_saver_state(stage);

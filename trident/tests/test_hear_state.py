@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pi-hear"))
 
-from hear_state import StatePublisher  # noqa: E402
+from hear_state import LevelPublisher, StatePublisher  # noqa: E402
 
 
 class FakeClock:
@@ -152,6 +152,62 @@ class RealSequence(unittest.TestCase):
         self.assertGreaterEqual(self.seen.count("asr"), 4,
                                 "recognising flickered instead of holding")
         self.assertEqual(self.seen[-1], "listening")
+
+
+class Levels(unittest.TestCase):
+    """The number that makes the map's waveform move.
+
+    Published separately from the state because it changes many times a second
+    and the state does not; folding it in would defeat the state file's "do not
+    re-state the same thing" rule, which is what keeps the caption steady.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.path = Path(tempfile.mkdtemp()) / "level"
+        self.clock = FakeClock()
+        # Normalised against the VAD threshold, so the map does not have to
+        # know anything about this particular microphone.
+        self.pub = LevelPublisher(str(self.path), threshold=0.08,
+                                  clock=self.clock)
+
+    def value(self):
+        return float(self.path.read_text().strip())
+
+    def test_silence_is_zero(self):
+        self.pub.publish(0.0)
+        self.assertEqual(self.value(), 0.0)
+
+    def test_speaking_well_above_the_threshold_saturates(self):
+        self.pub.publish(0.08 * 3)
+        self.assertEqual(self.value(), 1.0)
+
+    def test_louder_still_does_not_exceed_one(self):
+        self.pub.publish(1.0)
+        self.assertEqual(self.value(), 1.0)
+
+    def test_the_threshold_itself_is_a_third_of_the_way_up(self):
+        self.pub.publish(0.08)
+        self.assertAlmostEqual(self.value(), 1.0 / 3.0, places=3)
+
+    def test_rate_limited(self):
+        self.assertTrue(self.pub.publish(0.05))
+        self.clock.advance(0.01)
+        self.assertFalse(self.pub.publish(0.06))
+        self.clock.advance(0.05)
+        self.assertTrue(self.pub.publish(0.06))
+
+    def test_a_drop_to_silence_is_never_rate_limited(self):
+        # Letting the wave hang at full height after someone stops talking
+        # would say the opposite of what is true.
+        self.pub.publish(0.5)
+        self.clock.advance(0.001)
+        self.assertTrue(self.pub.publish(0.0))
+        self.assertEqual(self.value(), 0.0)
+
+    def test_disabled_when_no_path(self):
+        pub = LevelPublisher("", threshold=0.08, clock=FakeClock())
+        self.assertFalse(pub.publish(0.5))
 
 
 if __name__ == "__main__":

@@ -50,3 +50,44 @@ class StatePublisher:
         except OSError:
             return False
         return True
+
+
+class LevelPublisher:
+    """Writes one number, 0..1, for the map's waveform.
+
+    Separate from StatePublisher because it changes many times a second and
+    the state does not: folding it in would defeat the state file's "do not
+    re-state the same thing" rule, which is what stops the caption flickering.
+
+    Normalised against the VAD threshold so the map need know nothing about
+    this particular microphone -- the threshold is a third of the way up, and
+    three times it saturates. A drop to silence is published immediately
+    whatever the rate limit says, because a wave left standing at full height
+    after someone stops talking says the opposite of what is true.
+    """
+
+    def __init__(self, path, threshold, clock=time.monotonic, min_interval=0.05):
+        self.path = path
+        self.full = max(1e-6, threshold * 3.0)
+        self.clock = clock
+        self.min_interval = min_interval
+        self._at = 0.0
+        self._last = None
+
+    def publish(self, rms):
+        if not self.path:
+            return False
+        level = rms / self.full
+        level = 0.0 if level < 0.0 else (1.0 if level > 1.0 else level)
+        now = self.clock()
+        silent = level == 0.0 and self._last not in (0.0, None)
+        if not silent and now - self._at < self.min_interval:
+            return False
+        self._at = now
+        self._last = level
+        try:
+            with open(self.path, "w") as f:
+                f.write("%.4f\n" % level)
+        except OSError:
+            return False
+        return True

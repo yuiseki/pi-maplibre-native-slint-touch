@@ -90,6 +90,19 @@ export component MapWindow inherits Window {
     in property <string> caption-text: "";
     in property <bool> caption-busy: false;
 
+    // Voice UI stage, and what it is for:
+    //   0 idle      nothing drawn
+    //   1 armed     the wake word landed -- dim the map and show the waveform,
+    //               so it is obvious the device is now listening to *you*, and
+    //               obvious from the wave that it can actually hear you
+    //   2 thinking  the utterance is with the recogniser -- the words got
+    //               through, this is the part where you wait
+    in property <int> voice-stage: 0;
+    // Stylised waveform, as an SVG path built in C++ from one level value.
+    // Not real samples: the point is legible feedback, not an oscilloscope.
+    in property <string> wave-path: "";
+    in property <float> wave-pulse: 0.0;   // 0..1, drives the glow
+
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which
     // would otherwise consume Up/Down as zoom). Unhandled keys from other widgets
@@ -316,6 +329,61 @@ export component MapWindow inherits Window {
                     min-height: 56px;
                     text: "-";
                     clicked => { MMapAdapter.wheel-zoomed(map.width / 2 / 1px, map.height / 2 / 1px, 1); }
+                }
+            }
+
+            // Dim the map while the device is listening to someone. Drawn over
+            // the map but under the bar and toolbar, so the controls stay
+            // readable. Display-only: taps fall through to the map.
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 100%;
+                visible: root.voice-stage > 0;
+                background: root.voice-stage == 1 ? #00000066 : #0000008c;
+            }
+
+            // Waveform, in the band above the caption. Amplitude follows the
+            // input level, so a flat line means "not hearing you" and says so
+            // without words.
+            Rectangle {
+                x: 24px;
+                y: parent.height - 236px;
+                width: parent.width - 152px;
+                height: 76px;
+                visible: root.voice-stage == 1;
+                background: #05070ecc;
+                border-width: 1px;
+                border-color: #1e3064;
+                border-radius: 6px;
+                // Centre line, so a silent wave still reads as a wave.
+                Rectangle {
+                    x: 10px;
+                    y: parent.height / 2 - 1px;
+                    width: parent.width - 20px;
+                    height: 2px;
+                    background: #1e30642e;
+                }
+                Path {
+                    x: 10px;
+                    y: 0px;
+                    width: parent.width - 20px;
+                    height: 100%;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: root.wave-path;
+                    stroke: #7ab0f0;
+                    stroke-width: 2px;
+                }
+                // Level bar: the same number again, unambiguously.
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height - 10px;
+                    width: max(8px, (parent.width - 24px) * root.wave-pulse);
+                    height: 4px;
+                    background: #3d6bbf59;
+                    border-radius: 2px;
                 }
             }
 

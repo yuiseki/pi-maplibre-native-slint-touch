@@ -157,6 +157,9 @@ def main():
     ap.add_argument("--saver-pause-stage", type=int, default=1,
                     help="pause listening while saver stage >= this (idle is "
                          "touch-to-wake, not voice-wake; 0 disables)")
+    ap.add_argument("--level-file", default="/dev/shm/pi-hear-level",
+                    help="publish the current input level (0..1) here, for the "
+                         "map's waveform; empty string disables")
     ap.add_argument("--state-file", default="/dev/shm/pi-hear-state",
                     help="publish what we are doing here (listening / asr / "
                          "muted / paused) so the map can show a mic indicator; "
@@ -219,6 +222,7 @@ def main():
     # they are fiddly enough that getting them wrong is invisible until you
     # watch the screen (recognition flickered, the transcription never showed).
     _pub = hear_state.StatePublisher(args.state_file)
+    _level = hear_state.LevelPublisher(args.level_file, args.threshold)
 
     def publish_state(word, text="", hold=0.0, override=False):
         _pub.publish(word, text, hold=hold, override=override)
@@ -265,6 +269,11 @@ def main():
             do_flyto(place, text)
         elif matched:                          # wake only -> arm for the place
             armed_until[0] = time.time() + ARM_WINDOW
+            # Dim the map and start the waveform: from here until the window
+            # closes, the device is listening to this person rather than
+            # merely running. Held for the window so the capture loop's
+            # "listening" cannot take it back mid-sentence.
+            publish_state("armed", "", hold=ARM_WINDOW, override=True)
             print(f"WAKE (armed {ARM_WINDOW:.0f}s, awaiting place) '{text}'",
                   flush=True)
         elif armed and place:                  # place arrived just after the wake
@@ -411,6 +420,7 @@ def main():
                 if args.gain != 1.0:
                     chunk = np.clip(chunk * args.gain, -1.0, 1.0)
                 rms = float(np.sqrt(np.mean(chunk ** 2)))
+                _level.publish(rms)
                 voiced = rms >= args.threshold
 
                 if not in_speech:
