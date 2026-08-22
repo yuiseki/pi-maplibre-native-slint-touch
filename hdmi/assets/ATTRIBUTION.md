@@ -34,7 +34,7 @@ Source: https://commons.wikimedia.org/wiki/File:OOjs_UI_icon_keyboard.svg
 The single-path glyph was filled green (#6ee06e) and rasterised to 48x48 RGBA.
 Shown in the status bar only while a USB or Bluetooth keyboard is connected.
 
-## mic.svg / mic-green.png
+## mic.svg / mic-grey.png / mic-yellow.png / mic-green.png
 
 From the **Material Design** icon set by **Google Inc.**, via Wikimedia
 Commons, licensed **CC BY 4.0**
@@ -42,9 +42,12 @@ Commons, licensed **CC BY 4.0**
 
 Source: https://commons.wikimedia.org/wiki/File:Ic_mic_48px.svg
 
-The single-path glyph was filled green (#6ee06e) and rasterised to 48x48 RGBA,
-matching `kbd-green.png`. Shown in the status bar only while an ALSA capture
-device exists. (OOjs UI, which supplies the keyboard glyph, has no microphone
+The single-path glyph was rasterised to 48x48 RGBA in the same three tints the
+satellite and Wi-Fi glyphs use: grey (#8a8a8a, a mic exists but nobody is
+listening), yellow (#ffd24d, busy), green (#6ee06e, pi-hear waiting for
+speech). Hidden entirely when there is no ALSA capture device. Unlike the
+satellite and Wi-Fi greys these carry no red X: an unused microphone is idle,
+not broken. (OOjs UI, which supplies the keyboard glyph, has no microphone
 icon, hence the different source.)
 
 ## battery-charge.png / battery-full.png / battery-high.png / battery-middle.png / battery-low.png

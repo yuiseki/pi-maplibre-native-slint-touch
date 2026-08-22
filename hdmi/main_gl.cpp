@@ -268,8 +268,19 @@ int main(int /*argc*/, char** /*argv*/) {
         win->set_wifi_icon((*wifi_icons)[0]);
         // Keyboard-connected indicator (green glyph); visibility toggled in slint.
         win->set_kbd_icon(load_png_rgba(home + "/images/kbd-green.png"));
-        // Microphone-present indicator, same treatment.
-        win->set_mic_icon(load_png_rgba(home + "/images/mic-green.png"));
+    }
+
+    // Status-bar microphone icons: 0=grey (nobody listening), 1=yellow (busy),
+    // 2=green (pi-hear waiting for speech). Same grey/yellow/green vocabulary
+    // as the GPS and Wi-Fi glyphs.
+    auto mic_icons = std::make_shared<std::array<slint::Image, 3>>();
+    {
+        std::string home =
+            std::getenv("HOME") ? std::getenv("HOME") : "/home/yuiseki";
+        (*mic_icons)[0] = load_png_rgba(home + "/images/mic-grey.png");
+        (*mic_icons)[1] = load_png_rgba(home + "/images/mic-yellow.png");
+        (*mic_icons)[2] = load_png_rgba(home + "/images/mic-green.png");
+        win->set_mic_icon((*mic_icons)[0]);
     }
 
     // Status-bar battery icons (Icons8): index 0=charge(plugged), 1=full,
@@ -835,12 +846,13 @@ int main(int /*argc*/, char** /*argv*/) {
     auto net_ssid_mtx = std::make_shared<std::mutex>();
     auto kbd_conn = std::make_shared<std::atomic<bool>>(false);
     auto mic_present = std::make_shared<std::atomic<bool>>(false);
+    auto mic_state = std::make_shared<std::atomic<int>>(0);
     {
         auto ns = net_state;
         const char* ifenv = std::getenv("MAPLIBRE_NET_IFACE");
         std::string iface_override = ifenv ? ifenv : "";
         std::thread([ns, iface_override, net_ssid, net_ssid_mtx, kbd_conn,
-                     mic_present]() {
+                     mic_present, mic_state]() {
             while (true) {
                 // Default-route interface from /proc/net/route (the line whose
                 // hex Destination is 00000000).
@@ -974,6 +986,32 @@ int main(int /*argc*/, char** /*argv*/) {
                     }
                 }
                 mic_present->store(mic);
+
+                // Who is using it? pi-hear publishes a word to
+                // /dev/shm/pi-hear-state and keeps it fresh, so a stale file
+                // means pi-hear is not running -- which is a different thing
+                // from pi-hear sitting idle, and should not read as "ready".
+                int mstate = 0;
+                if (mic) {
+                    struct stat st {};
+                    if (::stat("/dev/shm/pi-hear-state", &st) == 0) {
+                        const int64_t rt =
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now()
+                                    .time_since_epoch())
+                                .count();
+                        if (rt - static_cast<int64_t>(st.st_mtim.tv_sec) < 5) {
+                            std::ifstream sf("/dev/shm/pi-hear-state");
+                            std::string word;
+                            std::getline(sf, word);
+                            if (word == "listening")
+                                mstate = 2;
+                            else if (word == "asr" || word == "muted")
+                                mstate = 1;
+                        }
+                    }
+                }
+                mic_state->store(mstate);
 
                 std::this_thread::sleep_for(std::chrono::seconds(3));
             }
@@ -1183,6 +1221,11 @@ int main(int /*argc*/, char** /*argv*/) {
                 }
                 win->set_kbd_connected(kbd_conn->load());
                 win->set_mic_present(mic_present->load());
+                {
+                    const int ms = mic_state->load();
+                    win->set_mic_state(ms);
+                    win->set_mic_icon((*mic_icons)[ms < 0 ? 0 : (ms > 2 ? 2 : ms)]);
+                }
 
                 if (sync_on->load() && stage == 0 && (orient_ok || gps_ok)) {
                     double p = op < 0.0 ? 0.0 : (op > 60.0 ? 60.0 : op);

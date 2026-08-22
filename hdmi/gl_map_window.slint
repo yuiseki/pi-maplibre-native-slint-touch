@@ -74,10 +74,13 @@ export component MapWindow inherits Window {
     in property <bool> kbd-connected: false;
     in property <image> kbd-icon;   // set from C++ (green keyboard PNG)
 
-    // Microphone present (an ALSA capture device exists). Shown or hidden;
-    // there is no "no mic" state to draw, so absence is just absence.
+    // Microphone. Hidden when no ALSA capture device exists -- there is no
+    // "no mic" state worth drawing. When one does, the colour says who is
+    // using it: grey = nobody listening, green = pi-hear waiting for speech,
+    // yellow = busy (transcribing, or muted while the map talks back).
     in property <bool> mic-present: false;
-    in property <image> mic-icon;   // set from C++ (green microphone PNG)
+    in property <int> mic-state: 0;   // 0=idle, 1=busy, 2=listening
+    in property <image> mic-icon;     // set from C++ (grey/yellow/green PNG)
 
     // Keyboard: arrow keys pan, Shift+Up/Down zoom. This FocusScope grabs focus
     // on startup (init below) so the arrows do NOT land on the zoom Slider (which

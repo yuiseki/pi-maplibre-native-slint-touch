@@ -156,6 +156,10 @@ def main():
     ap.add_argument("--saver-pause-stage", type=int, default=1,
                     help="pause listening while saver stage >= this (idle is "
                          "touch-to-wake, not voice-wake; 0 disables)")
+    ap.add_argument("--state-file", default="/dev/shm/pi-hear-state",
+                    help="publish what we are doing here (listening / asr / "
+                         "muted / paused) so the map can show a mic indicator; "
+                         "empty string disables")
     args = ap.parse_args()
 
     dev = None if args.device == "default" else find_input_device(args.device)
@@ -204,6 +208,28 @@ def main():
                 os.remove(args.mute_file)
             except OSError:
                 pass
+
+    # Publish what we are doing, for the map's microphone indicator. The file
+    # doubles as a heartbeat: a consumer that finds it stale knows pi-hear is
+    # not running, which is a different thing from pi-hear being idle. Rewritten
+    # on every state change and at most once a second otherwise, because the
+    # capture loop comes round many times a second and re-stating the same word
+    # is pointless even on tmpfs.
+    _state = {"word": None, "at": 0.0}
+
+    def publish_state(word):
+        if not args.state_file:
+            return
+        now = time.monotonic()
+        if word == _state["word"] and now - _state["at"] < 1.0:
+            return
+        _state["word"] = word
+        _state["at"] = now
+        try:
+            with open(args.state_file, "w") as sf:
+                sf.write(word + "\n")
+        except OSError:
+            pass
 
     def saver_active():
         # True while the map's screensaver is up (stage >= pause threshold).
@@ -291,6 +317,7 @@ def main():
                 open("/dev/shm/pi-map-pause", "w").close()
             except OSError:
                 pass
+            publish_state("asr")
             try:
                 text = engine.transcribe(samples, sr)
             finally:
@@ -298,6 +325,7 @@ def main():
                     os.remove("/dev/shm/pi-map-pause")
                 except OSError:
                     pass
+                publish_state("listening")
             if args.debug:
                 print(f"[flush] dur={dur:.1f}s peak={peak:.4f} "
                       f"uttq={utt_q.qsize()} -> '{text}'",
@@ -353,6 +381,7 @@ def main():
                 # Half-duplex: while muted (pi-say is playing), drop audio and
                 # reset VAD state so the speaker output is never transcribed.
                 if args.mute_file and os.path.exists(args.mute_file):
+                    publish_state("muted")
                     in_speech = False
                     speech = []
                     preroll.clear()
@@ -365,6 +394,7 @@ def main():
                     try:
                         with open(args.saver_file) as _sf:
                             if int(_sf.read().strip() or "0") >= args.saver_pause_stage:
+                                publish_state("paused")
                                 in_speech = False
                                 speech = []
                                 preroll.clear()
@@ -381,6 +411,7 @@ def main():
                                 continue
                     except (OSError, ValueError):
                         pass
+                publish_state("listening")
                 if args.gain != 1.0:
                     chunk = np.clip(chunk * args.gain, -1.0, 1.0)
                 rms = float(np.sqrt(np.mean(chunk ** 2)))
