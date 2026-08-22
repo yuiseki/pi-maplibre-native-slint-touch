@@ -86,7 +86,16 @@ def main():
     ap.add_argument("--engine", default="moonshine",
                     choices=["moonshine", "whisper"],
                     help="ASR engine (default: moonshine)")
-    ap.add_argument("--language", default="ja")
+    # Which language the recogniser decodes. Fixed rather than detected: on
+    # this machine `-l auto` costs a flat ~3.2s against ~1.2s for a language
+    # that is simply told, and it decides wrongly often enough to matter (a
+    # Japanese-accented English utterance came back as Chinese). Everyday use
+    # is Japanese; a demo in English is a service restart, not a rebuild.
+    ap.add_argument("--language", default=os.environ.get("PI_HEAR_LANG", "ja"),
+                    help="whisper decode language: ja (default), en, or auto "
+                         "(auto is ~2.6x slower and can pick wrong). Also "
+                         "settable as PI_HEAR_LANG, e.g. from "
+                         "/etc/default/pi-hear")
     ap.add_argument(
         "--device",
         default="DJI",
@@ -245,9 +254,13 @@ def main():
     armed_until = [0.0]   # wall-clock; > now while armed (mutable cell for closure)
 
     def do_flyto(place, text):
-        key, spoken, dist = place
-        print(f"WAKE -> flyto {key}  '{text}'", flush=True)
-        say_muted(f"承知しました。{spoken}を表示します。")
+        key, spoken_ja, spoken_en, dist = place
+        # Answer in whatever language was spoken to us. `text` is what came
+        # back from the recogniser, so its script is the honest signal -- no
+        # need to ask whisper which language it decided on.
+        lang = romaji_match.reply_language(text)
+        print(f"WAKE -> flyto {key} [{lang}]  '{text}'", flush=True)
+        say_muted(romaji_match.confirmation(lang, spoken_ja, spoken_en))
         subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
 
     def act(text):

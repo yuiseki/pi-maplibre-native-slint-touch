@@ -1,0 +1,25 @@
+# pi-hear: which language to listen in.  Install to /etc/default/pi-hear
+#
+# The recogniser is told the language rather than detecting it. On a Pi 5,
+# whisper-base takes about 1.2s either way when it is told, and a flat ~3.2s
+# with `-l auto` -- the detection is a fixed cost paid on every utterance, and
+# it can still decide wrongly (an English sentence spoken with a Japanese
+# accent came back as Chinese). Being told is both faster and more reliable.
+#
+# Getting it wrong is expensive in the other direction too: English decoded as
+# Japanese took 2.8s and came back as シュー・ヒュ・ア・シーマ, where the same
+# audio decoded as English took 1.2s and came back as "show Hiroshima".
+#
+#   ja    everyday use
+#   en    for demoing to an English-speaking audience
+#   auto  both, at ~2.6x the latency; a last resort
+#
+# Changing this is a restart, not a rebuild:
+#   sudo sed -i 's/^PI_HEAR_LANG=.*/PI_HEAR_LANG=en/' /etc/default/pi-hear
+#   sudo systemctl restart pi-hear
+#
+# The wake word and the place names need no switching: both are matched by
+# romanising them, so "Trident" and トライデント collapse to the same string,
+# as do "Hiroshima" and 広島. The reply is spoken in whichever language the
+# recogniser came back in.
+PI_HEAR_LANG=ja

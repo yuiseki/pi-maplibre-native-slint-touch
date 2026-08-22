@@ -12,6 +12,10 @@ WorkingDirectory=/home/yuiseki/src/pi-hear
 # pi-say / pi-flyto are called by absolute path already.
 Environment=PATH=/home/yuiseki/src/whisper.cpp/build/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8
+# Which language to listen in (PI_HEAR_LANG). Everyday use is Japanese; a demo
+# to an English-speaking audience is a line in this file and a restart. The
+# leading "-" means the file is optional.
+EnvironmentFile=-/etc/default/pi-hear
 # Mic referenced by CARD name (not index) so a reboot's USB enumeration order
 # can't break it. Empty --whisper-prompt = no initial-prompt biasing (intentional).
 ExecStart=/home/yuiseki/.venv-ahear/bin/python /home/yuiseki/src/pi-hear/pi_hear.py \
