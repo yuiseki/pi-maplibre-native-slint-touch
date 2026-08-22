@@ -270,7 +270,14 @@ do_connect() {
     # Arm the restore before touching the transmitter, the same way pi-net arms
     # a reconnect before disconnecting: if this process is killed between the two
     # steps, the deck must not be left on a 1 dBm Wi-Fi link.
-    run_quiet $SUDO systemd-run --on-active=120 --unit=pi-kbd-txrestore --collect \
+    #
+    # The name carries the pid because these overlap in normal use: `pi-kbd
+    # watch` retries every 20 s and a connect can run for a minute, so a manual
+    # connect meets a timer the watcher already armed. With one fixed name the
+    # second arming failed and pi-kbd, correctly refusing to touch Wi-Fi it
+    # could not promise to restore, became unable to reconnect at all.
+    local unit="pi-kbd-txrestore-$$"
+    run_quiet $SUDO systemd-run --on-active=120 --unit="$unit" --collect \
         "$IW" dev "$WIFI" set txpower auto \
         || { echo "pi-kbd: could not arm the txpower restore; not touching Wi-Fi" >&2; return 1; }
 
@@ -285,7 +292,7 @@ do_connect() {
     done
 
     run $SUDO "$IW" dev "$WIFI" set txpower auto
-    run_quiet $SUDO $SYSTEMCTL stop pi-kbd-txrestore.timer || true
+    run_quiet $SUDO $SYSTEMCTL stop "$unit.timer" || true
 
     [ -n "$DRY" ] && return 0
     [ "$ok" = 0 ] || echo "pi-kbd: gave up after $TRIES attempts" >&2

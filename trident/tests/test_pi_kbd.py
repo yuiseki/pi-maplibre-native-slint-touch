@@ -286,6 +286,32 @@ class TuneTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class DeadManNamingTest(unittest.TestCase):
+    """Two connects must not fight over the restore timer.
+
+    `pi-kbd watch` retries every 20 s and a connect can take a minute, so a
+    manual `pi-kbd connect` overlaps it as a matter of course. With one fixed
+    unit name the second arming fails, and pi-kbd then refuses to touch Wi-Fi at
+    all -- which is right in principle and meant, in practice, that the keyboard
+    could not be reconnected by any means.
+    """
+
+    def _unit(self, out):
+        for tok in out.split():
+            if tok.startswith("--unit=pi-kbd-txrestore"):
+                return tok.split("=", 1)[1]
+        self.fail("no restore unit armed in: %s" % out)
+
+    def test_the_restore_unit_name_is_unique_per_run(self):
+        a = self._unit(run(["connect", "--dry-run"], NOTHING).stdout)
+        b = self._unit(run(["connect", "--dry-run"], NOTHING).stdout)
+        self.assertNotEqual(a, b)
+
+    def test_the_same_run_disarms_the_unit_it_armed(self):
+        out = run(["connect", "--dry-run"], NOTHING).stdout
+        self.assertIn("stop %s.timer" % self._unit(out), out)
+
+
 class ConfigTest(unittest.TestCase):
     def test_mac_and_controller_come_from_the_environment(self):
         r = run(["present"], BOTH,
@@ -311,7 +337,7 @@ class DryRunTest(unittest.TestCase):
                         "must lower before restoring")
         # The dead-man is only stood down after the radio is actually back.
         self.assertLess(out.rindex("txpower auto"),
-                        out.index("stop pi-kbd-txrestore.timer"),
+                        out.index("stop pi-kbd-txrestore"),
                         "restore the radio before disarming the dead-man")
 
     def test_dry_run_arms_the_dead_man_before_lowering(self):
