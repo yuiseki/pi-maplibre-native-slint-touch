@@ -33,6 +33,7 @@ import hear_state
 import wake as wakelib
 import engines as enginelib
 import romaji_match
+import intent as intent_mod
 
 
 def find_input_device(name_hint):
@@ -263,6 +264,25 @@ def main():
         say_muted(romaji_match.confirmation(lang, spoken_ja, spoken_en))
         subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
 
+    def do_intent(text):
+        """Handle what the place table could not. True if something was done."""
+        plan = intent_mod.for_voice(text)
+        if plan is None:
+            return False
+        lang = romaji_match.reply_language(text)
+        what = plan["intent"]
+        print(f"WAKE -> {plan['tool']} {plan['args']} [{lang}]  '{text}'",
+              flush=True)
+        if what["intent"] == "show_place":
+            say_muted("承知しました。" if lang == "ja" else "OK.")
+        try:
+            subprocess.run(["/usr/local/bin/" + plan["tool"]] + plan["args"],
+                           timeout=plan["timeout"])
+        except Exception as e:                      # noqa: BLE001
+            # A slow Overpass or a missing tool must not take the loop down.
+            print(f"[act] {plan['tool']}: {e}", file=sys.stderr)
+        return True
+
     def act(text):
         # Touch-to-wake, not voice-wake: while the screensaver is up, ignore
         # voice commands entirely. An utterance already in flight in the worker
@@ -292,8 +312,15 @@ def main():
         elif armed and place:                  # place arrived just after the wake
             armed_until[0] = 0.0
             do_flyto(place, text)
-        elif armed:                            # still armed, no place yet
-            print(f"---- (armed, no place yet) '{text}'", flush=True)
+        elif (matched or armed) and do_intent(text):
+            # The place table has nine cities in it and the planet has millions,
+            # and "show cafes on map" is not a place at all. Anything the table
+            # cannot answer gets one rule-based reading before being given up
+            # on -- rules only, because the model costs about nine seconds and
+            # this is the middle of someone's sentence.
+            armed_until[0] = 0.0
+        elif armed:                            # still armed, nothing understood
+            print(f"---- (armed, nothing understood) '{text}'", flush=True)
         else:
             print(f"---- s={score:.2f} '{text}'", flush=True)
 

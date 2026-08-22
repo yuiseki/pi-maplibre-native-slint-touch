@@ -235,6 +235,32 @@ def by_model(transcript, llama=None, model=None, timeout=None):
     return answer_only(proc.stdout or "")
 
 
+BIN = "/usr/local/bin/"
+
+
+def for_voice(transcript):
+    """What the voice loop should run, or None to stay silent.
+
+    Rules only. The voice loop cannot spend nine seconds in the middle of an
+    utterance, and a sentence that matches no rule is better left alone than
+    guessed at -- this moves someone's map for them.
+    """
+    result = by_rule(transcript)
+    if result is None:
+        return None
+    name = result["intent"]
+    if name == "show_place" and result["place"]:
+        return {"tool": "pi-geocode", "args": ["--fly", result["place"]],
+                "timeout": 30, "intent": result}
+    if name == "show_poi" and result["category"]:
+        return {"tool": "pi-poi", "args": [result["category"]],
+                "timeout": 120, "intent": result}
+    if name == "clear_poi":
+        return {"tool": "pi-poi", "args": ["clear"],
+                "timeout": 20, "intent": result}
+    return None
+
+
 def read(transcript, use_model=True):
     """Rules if they are sure, otherwise the model, otherwise unknown."""
     quick = by_rule(transcript)

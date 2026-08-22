@@ -194,5 +194,51 @@ class PromptTest(unittest.TestCase):
         self.assertTrue(p.rstrip().endswith(intent.PROMPT_TAIL.rstrip()))
 
 
+class VoiceDispatchTest(unittest.TestCase):
+    """What the voice loop should do when its nine-city table does not match.
+
+    pi-hear matches a hand-written table by romaji edit distance. That table has
+    nine cities in it. Everything else -- every other place on the planet, and
+    every sentence that is not "<wake> <city>" -- currently falls through to a
+    log line. This decides what happens instead, without waking the model: the
+    voice loop cannot afford nine seconds mid-sentence.
+    """
+
+    def test_a_poi_request_becomes_a_poi_command(self):
+        d = intent.for_voice("show cafes on map")
+        self.assertEqual(d["tool"], "pi-poi")
+        self.assertEqual(d["args"], ["cafe"])
+
+    def test_clearing_becomes_a_clear_command(self):
+        d = intent.for_voice("remove cafes from map")
+        self.assertEqual(d["tool"], "pi-poi")
+        self.assertEqual(d["args"], ["clear"])
+
+    def test_an_unlisted_place_goes_to_the_geocoder(self):
+        d = intent.for_voice("show me the map of Reykjavik")
+        self.assertEqual(d["tool"], "pi-geocode")
+        self.assertIn("--fly", d["args"])
+        self.assertIn("Reykjavik", d["args"])
+
+    def test_japanese_works_too(self):
+        self.assertEqual(intent.for_voice("地図にカフェを表示して")["tool"],
+                         "pi-poi")
+
+    def test_an_unrecognised_sentence_does_nothing(self):
+        # Silence is the right answer; guessing moves someone's map for them.
+        self.assertIsNone(intent.for_voice("what is the weather like"))
+
+    def test_the_model_is_never_woken_here(self):
+        # for_voice must be a rule-only path. If it ever reaches the model this
+        # returns after several seconds, mid-utterance.
+        import time as _t
+        t0 = _t.time()
+        intent.for_voice("a sentence that matches nothing at all")
+        self.assertLess(_t.time() - t0, 0.5)
+
+    def test_show_poi_without_a_category_does_nothing(self):
+        self.assertIsNone(intent.for_voice("show something on the map"))
+
+
 if __name__ == "__main__":
     unittest.main()
