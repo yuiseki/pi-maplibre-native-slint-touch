@@ -23,11 +23,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, "/home/yuiseki/src/pi-hear")
 import geo  # noqa: E402
 
+# The environment wins; the file is the default. Read here rather than relying
+# on systemd's EnvironmentFile, which only reaches a unit's own process -- and
+# this is run from the voice loop and from a shell.
+_CONF = {}
+try:
+    _CONF = geo.read_conf(os.environ.get("PI_POI_CONF", "/etc/default/pi-poi"))
+except Exception:                                  # noqa: BLE001
+    pass
+
+
+def _cfg(name, default):
+    return os.environ.get(name) or _CONF.get(name) or default
+
+
 OVERPASS = os.environ.get("PI_POI_OVERPASS", "http://127.0.0.1:8002")
 NOMINATIM = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
 MARKERS = os.environ.get("PI_POI_MARKERS", "/dev/shm/pi-mesh-nodes")
 FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
-RADIUS = int(os.environ.get("PI_POI_RADIUS", "1500"))
+RADIUS = int(_cfg("PI_POI_RADIUS", "1500"))
+GPS = os.environ.get("PI_POI_GPS", "/dev/shm/pi-gps-lastfix")
+# A fallback position for a deck with no GPS fix, "lat lon". Unset by default:
+# an unset home means "say you do not know", which is better than showing
+# someone cafes in a city they have never been to.
+HOME = _cfg("PI_POI_HOME", "")
 
 
 def ask_overpass(query, base=OVERPASS, timeout=90):
@@ -44,18 +63,7 @@ def ask_nominatim(query, base=NOMINATIM, timeout=20):
         return r.read().decode("utf-8", "replace")
 
 
-def where_is_the_map():
-    """The map's last flyTo, which is the best guess at what is on screen.
 
-    The map does not publish its camera, so this is the last place it was told
-    to go. Good enough: "show cafes" almost always follows "show me <place>".
-    """
-    try:
-        with open(FLYTO) as fh:
-            parts = fh.read().split()
-        return float(parts[0]), float(parts[1])
-    except Exception:                              # noqa: BLE001
-        return None
 
 
 def main():
@@ -87,13 +95,15 @@ def main():
         lat, lon = place.lat, place.lon
         with open(FLYTO, "w") as fh:
             fh.write(place.flyto_line() + "\n")
+    source = "given"
     if lat is None:
-        here = where_is_the_map()
+        here = geo.where_now(flyto=FLYTO, gps=GPS, home=HOME)
         if here is None:
-            print("pi-poi: the map has not been anywhere yet; give a place",
-                  file=sys.stderr)
+            print("pi-poi: nowhere to look -- the map has not been anywhere, "
+                  "there is no GPS fix, and PI_POI_HOME is unset. "
+                  "Name a place.", file=sys.stderr)
             return 1
-        lat, lon = here
+        lat, lon, source = here
 
     try:
         query = geo.overpass_query(args.category, lat, lon, args.radius)
@@ -109,10 +119,11 @@ def main():
     n = len(lines.splitlines()) if lines else 0
     if args.json:
         print(json.dumps({"category": args.category, "lat": lat, "lon": lon,
-                          "radius": args.radius, "count": n}))
+                          "radius": args.radius, "count": n,
+                          "from": source}))
     else:
-        print("%d %s around %.4f %.4f (r=%dm)"
-              % (n, args.category, lat, lon, args.radius))
+        print("%d %s around %.4f %.4f (r=%dm, from %s)"
+              % (n, args.category, lat, lon, args.radius, source))
     return 0
 
 

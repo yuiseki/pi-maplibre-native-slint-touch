@@ -229,6 +229,87 @@ def normalise_category(word):
     return None
 
 
+def read_conf(path):
+    """A shell-style KEY=value file, as a dict. Missing file is empty.
+
+    systemd's EnvironmentFile only reaches the unit's own process, and these
+    tools are run from the voice loop and from a shell as well. Configuring a
+    home position in /etc/default and having it silently ignored is exactly the
+    kind of failure that looks like the setting not working.
+    """
+    out = {}
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key.strip()] = value
+    return out
+
+
+def _read_position(path):
+    """First two numbers in a file, if they are a plausible position.
+
+    A garbled file can parse as two floats and still not be anywhere -- the
+    range check is what stops "999 999" from becoming a query.
+    """
+    try:
+        with open(path) as fh:
+            parts = fh.read().split()
+        lat, lon = float(parts[0]), float(parts[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        return (lat, lon)
+    return None
+
+
+def where_now(flyto="/dev/shm/pi-map-flyto",
+              gps="/dev/shm/pi-gps-lastfix",
+              home=None):
+    """Where "here" is when the command named no place, and how we know.
+
+    Returns (lat, lon, source) or None.
+
+    "show cafes on map" is the common case and it names nowhere. The map does
+    not publish its camera, and after a reboot it is showing the whole world
+    (the style starts at 0,0 zoom 1) with /dev/shm empty, so there is genuinely
+    nothing to centre on. In order of how likely each is to be what the person
+    means:
+
+      flyto   where the map was last sent. Almost always right: "show cafes"
+              follows "show me <place>".
+      gps     where the deck itself is. Right when nobody has moved the map.
+      home    a coordinate someone configured, for a deck with no GPS fix.
+
+    Returning None rather than guessing a city is deliberate: being told the
+    map has not been anywhere is better than being shown cafes in a place the
+    person has never been.
+    """
+    for path, name in ((flyto, "map"), (gps, "gps")):
+        if path:
+            pos = _read_position(path)
+            if pos:
+                return (pos[0], pos[1], name)
+    if home:
+        import io
+        try:
+            lat, lon = (float(x) for x in str(home).split()[:2])
+        except (IndexError, ValueError):
+            return None
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+            return (lat, lon, "home")
+    return None
+
+
 def canonical_category(word):
     """The English name for whatever was said, or None.
 

@@ -1,0 +1,19 @@
+# /etc/default/pi-poi -- where "here" is when the command named no place.
+
+# "show cafes on map" names nowhere, and after a reboot the map is showing the
+# whole world (its style starts at 0,0 zoom 1) with /dev/shm empty, so there is
+# genuinely nothing to centre on. pi-poi looks in this order:
+#
+#   1. the map's last flyTo   /dev/shm/pi-map-flyto
+#   2. the deck's own GPS fix /dev/shm/pi-gps-lastfix
+#   3. this
+#
+# Leave it unset and pi-poi says it does not know, which is the right answer
+# when it does not: showing someone cafes in a city they have never been to is
+# worse than admitting the map has not been anywhere.
+#
+# Hiroshima.
+PI_POI_HOME=34.3917 132.4518
+
+# Metres. 1500 is a walk; a city-wide sweep is better asked for by name.
+PI_POI_RADIUS=1500
