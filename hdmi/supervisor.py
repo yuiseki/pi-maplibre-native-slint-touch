@@ -11,7 +11,11 @@ getty(autologin シェル)」をそのまま使う。マップ(seatd/libseat で
   TERMINAL : 子を止め、tty1 の console を前面に出す(本プロセスは何も描かない)。
 
 切替:
-  - MAP 中に USB キーボードの Ctrl+C を 1.5 秒以内に2回 → TERMINAL
+  - MAP 中に Ctrl+C または Esc を 1.5 秒以内に2回 → TERMINAL
+    (Esc があるのは CardKB2 に Ctrl キーが物理的に無いため。42キーのうち
+     Ctrl は一つも無く、あの端末では Ctrl+C×2 は不可能。Esc は Fn+1。
+     Enter は割り当てない: 地図操作中に押しがちで、誤ってコンソールに
+     落ちるほうがショートカットが無いことより悪い)
   - TERMINAL の shell で `pi-maps` (= /tmp/pi-display/request に "map") → MAP
 
 キーボードは生 evdev で読む(python3-evdev 不要)。USB は by-id の
@@ -39,11 +43,48 @@ SAVER_STAGE = "/dev/shm/pi-saver-stage"
 
 # linux/input-event-codes.h
 EV_KEY = 0x01
+KEY_ESC = 1
+KEY_ENTER = 28
 KEY_LEFTCTRL, KEY_RIGHTCTRL, KEY_C = 29, 97, 46
 # struct input_event: timeval(long sec, long usec) + u16 type + u16 code + s32 value
 EVENT_FMT = "llHHi"
 EVENT_SIZE = struct.calcsize(EVENT_FMT)
 DOUBLE_WINDOW = 1.5  # Ctrl+C 連続2回とみなす最大間隔 (秒)
+
+
+class ExitGesture:
+    """Ctrl+C x2 / Esc x2 の検出。
+
+    キーごとに別の時計を持つ。混ぜて交互に押しても「2回」にはならない。
+    成立したら対を消費するので、3回目は次の対の1回目として数える。
+    """
+
+    def __init__(self, window=1.5):
+        self.window = window
+        self.ctrl_held = False
+        self.last = {}          # code -> 直前の押下時刻
+
+    def feed(self, code, value, now):
+        """1 イベントを与える。成立したらジェスチャ名(真値)、でなければ False。"""
+        if code in (KEY_LEFTCTRL, KEY_RIGHTCTRL):
+            self.ctrl_held = value != 0
+            return False
+        # value 1 = 押下のみ。2 は自動リピートで、押しっぱなしが勝手に
+        # 成立してしまうため数えない。0 は離した瞬間。
+        if value != 1:
+            return False
+        if code == KEY_C and self.ctrl_held:
+            name = "Ctrl+C x2"
+        elif code == KEY_ESC:
+            name = "Esc x2"
+        else:
+            return False
+        prev = self.last.get(code, 0.0)
+        if prev and now - prev <= self.window:
+            self.last[code] = 0.0
+            return name
+        self.last[code] = now
+        return False
 
 
 def log(*a):
@@ -163,8 +204,7 @@ def main():
     rescan_keyboards()
     mode = "map"
     child = start_map()
-    ctrl_held = False
-    last_ctrl_c = 0.0
+    gesture = ExitGesture(DOUBLE_WINDOW)
     last_scan = time.time()
     log("started. mode=MAP keyboards=%d" % len(kbds))
 
@@ -196,7 +236,7 @@ def main():
                 last_scan = now
                 rescan_keyboards()
 
-            # --- キーボード読取 (Ctrl+C x2 は MAP 中のみ作用) ---
+            # --- キーボード読取 (脱出ジェスチャは MAP 中のみ作用) ---
             if not kbds:
                 time.sleep(0.3)
                 continue
@@ -215,24 +255,19 @@ def main():
                         EVENT_FMT, data[off:off + EVENT_SIZE])
                     if etype != EV_KEY:
                         continue
-                    if code in (KEY_LEFTCTRL, KEY_RIGHTCTRL):
-                        ctrl_held = value != 0
-                    elif code == KEY_C and value == 1 and ctrl_held and mode == "map":
-                        t = time.time()
-                        if t - last_ctrl_c <= DOUBLE_WINDOW:
-                            last_ctrl_c = 0.0
-                            if saver_active():
-                                # Screensaver up: the map's own Ctrl+C x2 watcher
-                                # resets its idle clock and wakes the live map.
-                                # Don't drop to the console here.
-                                log("Ctrl+C x2 -> WAKE (screensaver; map handles)")
-                            else:
-                                log("Ctrl+C x2 -> TERMINAL")
-                                stop_map(child)
-                                child = None
-                                mode = "terminal"
-                        else:
-                            last_ctrl_c = t
+                    fired = gesture.feed(code, value, time.time())
+                    if not fired or mode != "map":
+                        continue
+                    if saver_active():
+                        # Screensaver up: the map's own watcher resets its idle
+                        # clock and wakes the live map. Don't drop to the
+                        # console here -- the first gesture means "come back".
+                        log("%s -> WAKE (screensaver; map handles)" % fired)
+                    else:
+                        log("%s -> TERMINAL" % fired)
+                        stop_map(child)
+                        child = None
+                        mode = "terminal"
     except KeyboardInterrupt:
         pass
     finally:

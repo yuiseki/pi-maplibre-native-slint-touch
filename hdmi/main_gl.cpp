@@ -779,12 +779,16 @@ int main(int /*argc*/, char** /*argv*/) {
         }).detach();
     }
 
-    // (a2) Keyboard Ctrl+C x2 -> wake. The touch watcher (a) is restricted to
-    //   the touchscreen (MAPLIBRE_INPUT_DEVS) so stray HID/HDMI "keys" can't wake
-    //   the screensaver, but a deliberate Ctrl+C pressed twice within 1.5s on a
-    //   real keyboard also wakes -- handy over a USB or Bluetooth keyboard
-    //   without reaching for the panel. ONLY this exact combo wakes (arbitrary
-    //   keys are ignored). Keyboards are auto-discovered by KEY_C capability
+    // (a2) Keyboard x2 -> wake, on Ctrl+C, Enter or Esc. The touch watcher (a)
+    //   is restricted to the touchscreen (MAPLIBRE_INPUT_DEVS) so stray
+    //   HID/HDMI "keys" can't wake the screensaver, but a deliberate press
+    //   repeated within 1.5s on a real keyboard also wakes -- handy over a USB
+    //   or Bluetooth keyboard without reaching for the panel. ONLY these wake
+    //   (arbitrary keys are ignored); doubling is what keeps a stray press from
+    //   counting. Enter and Esc are there because Ctrl+C needs two keys held
+    //   together, which a small keyboard may not report reliably -- and because
+    //   they are the two keys anyone tries first on a screen that looks stuck.
+    //   Keyboards are auto-discovered by KEY_C capability
     //   (excludes the USB-mic HID and HDMI nodes, which lack letter keys) and
     //   re-scanned every 2s so a Bluetooth keyboard paired after boot is picked
     //   up; a device that disappears (BT disconnect) is dropped and re-added on
@@ -833,7 +837,10 @@ int main(int /*argc*/, char** /*argv*/) {
                 closedir(d);
             };
             bool ctrl_down = false;
-            int64_t last_cc = 0;   // time of the previous Ctrl+C (0 = none pending)
+            // Time of the previous qualifying press, per key (0 = none
+            // pending). Kept separate so alternating Enter and Esc does not
+            // count as a double of either.
+            int64_t last_cc = 0, last_enter = 0, last_esc = 0;
             int64_t last_scan = 0;
             while (true) {
                 int64_t now = now_ms();
@@ -867,14 +874,25 @@ int main(int /*argc*/, char** /*argv*/) {
                             continue;
                         if (ev.code == KEY_LEFTCTRL || ev.code == KEY_RIGHTCTRL) {
                             ctrl_down = (ev.value != 0);   // 1=press, 2=repeat
-                        } else if (ev.code == KEY_C && ev.value == 1 &&
-                                   ctrl_down) {
-                            int64_t t = now_ms();
-                            if (last_cc != 0 && t - last_cc <= 1500) {
-                                la->store(t);   // Ctrl+C x2 within 1.5s -> wake
-                                last_cc = 0;
-                            } else {
-                                last_cc = t;
+                        } else if (ev.value == 1) {
+                            // value 1 = press (2 is auto-repeat, which must not
+                            // count: holding the key down would wake by itself).
+                            int64_t* prev = nullptr;
+                            if (ev.code == KEY_C && ctrl_down)
+                                prev = &last_cc;
+                            else if (ev.code == KEY_ENTER ||
+                                     ev.code == KEY_KPENTER)
+                                prev = &last_enter;
+                            else if (ev.code == KEY_ESC)
+                                prev = &last_esc;
+                            if (prev) {
+                                int64_t t = now_ms();
+                                if (*prev != 0 && t - *prev <= 1500) {
+                                    la->store(t);   // twice within 1.5s -> wake
+                                    *prev = 0;
+                                } else {
+                                    *prev = t;
+                                }
                             }
                         }
                     }
