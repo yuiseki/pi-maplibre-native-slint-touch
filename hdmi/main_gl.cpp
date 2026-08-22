@@ -32,6 +32,7 @@
 
 #include "gl_map_window.h"
 #include "slint_map_gl.hpp"
+#include "style_list.hpp"
 
 // DVD logo dimensions (display + alpha-mask size).
 // DVD logo dimensions (display + alpha-mask size).
@@ -389,7 +390,30 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
 
+    // Style list. A `label,url` file replaces the built-in one when present,
+    // so aiming the device at a local server -- which is what running it
+    // off-grid amounts to -- is an edit rather than a rebuild. Falls back to
+    // the list compiled into the .slint file when no file is found.
     std::string styleUrl = "https://demotiles.maplibre.org/style.json";
+    {
+        const auto styles = maplibre_slint::find_style_list();
+        if (!styles.empty()) {
+            std::vector<slint::SharedString> names, urls;
+            names.reserve(styles.size());
+            urls.reserve(styles.size());
+            for (const auto& e : styles) {
+                names.emplace_back(e.label.c_str());
+                urls.emplace_back(e.url.c_str());
+            }
+            win->set_style_names(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(names)));
+            win->set_style_urls(std::make_shared<slint::VectorModel<slint::SharedString>>(std::move(urls)));
+            styleUrl = styles.front().url;
+            std::cout << "[styles] " << styles.size()
+                      << " from file; first = " << styleUrl << std::endl;
+        }
+    }
+    // The environment still wins, so a one-off "show me this style" needs no
+    // file at all.
     if (const char* env = std::getenv("MAPLIBRE_STYLE_URL")) {
         if (env[0] != '\0')
             styleUrl = env;

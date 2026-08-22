@@ -18,6 +18,7 @@ if(MLN_WITH_OPENGL AND NOT APPLE AND NOT WIN32)
         main_gl.cpp
         src/slint_map_gl.cpp
         src/slint_gl_backend.cpp
+        src/style_list.cpp
         platform/custom_file_source.cpp
     )
 

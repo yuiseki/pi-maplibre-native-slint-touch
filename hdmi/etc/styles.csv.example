@@ -1,0 +1,24 @@
+# Map styles offered in the dropdown, in this order.  `label,url` per line.
+# Install to ~/.config/maplibre-slint-gl/styles.csv (or point
+# MAPLIBRE_STYLES_FILE at it).  Blank lines and # comments are ignored.
+#
+# The label is free text and may contain commas -- the split is on the LAST
+# one, since a URL never has any.  An entry missing either half is skipped:
+# a blank row in the dropdown, or a name that loads nothing, both look like
+# the device is broken.
+#
+# The first entry is the style loaded at startup, unless MAPLIBRE_STYLE_URL
+# says otherwise.
+#
+# ---- Off-grid ---------------------------------------------------------------
+# These point at a Caddy serving /usr/share/caddy/static on the device itself,
+# so the map works with no network at all.  For the networked equivalent,
+# replace http://localhost with https://yuiseki.dev.
+OSM Bright,http://localhost/static/styles/osm-bright.json
+OSM NoLabel,http://localhost/static/styles/osm-nolabel.json
+OSM Fiord,http://localhost/static/styles/osm-fiord.json
+OSM Liberty,http://localhost/static/styles/osm-liberty.json
+MapTiler Basic,http://localhost/static/styles/maptiler-basic-ja.json
+MapTiler 3D,http://localhost/static/styles/maptiler-3d.json
+OSM Positron,http://localhost/static/styles/osm-positron.json
+OSM Toner,http://localhost/static/styles/osm-toner.json

@@ -21,8 +21,11 @@ export component MapWindow inherits Window {
     changed map-size => { map-size-changed(); }
 
     // The ComboBox shows the readable names; selecting one applies the URL at
-    // the same index (the two lists are kept parallel).
-    property <[string]> style-names: [
+    // the same index (the two lists are kept parallel). C++ replaces both from
+    // a `label,url` file when one exists -- pointing the device at a different
+    // server, which is the whole of running it off-grid, should not be a
+    // rebuild. The lists below are the fallback when no file is found.
+    in-out property <[string]> style-names: [
         "OSM Bright",
         "OSM NoLabel",
         "OSM Fiord",
@@ -30,7 +33,7 @@ export component MapWindow inherits Window {
         "MapTiler Basic",
         "MapTiler 3D",
     ];
-    property <[string]> style-urls: [
+    in-out property <[string]> style-urls: [
         "https://yuiseki.dev/static/styles/osm-bright.json",
         "https://yuiseki.dev/static/styles/osm-nolabel.json",
         "https://yuiseki.dev/static/styles/osm-fiord.json",
