@@ -146,15 +146,30 @@ pi4(A72)で一番苦しかった推論時間が縮む。ビルドは pi5-deck �
 **Pi 5 固有の落とし穴**:
 
 - **音声出力が無い**。Pi 5 に 3.5mm ジャックは無く、Osoyoo 3.5" パネルの HDMI は音声を拒否する
-  (`aplay: audio open error: 524`)。USB の C-Media PCM2902 は capture 専用。よって
-  `pi-say` の既定 `plughw:0,0` は使えず、**Bluetooth (bluealsa) が唯一の出力経路**。
-  `bluez-alsa-utils` + HFP-AG override + `~/.asoundrc` の `btspk` を用意し、unit は
-  `--say-device btspk` で起動する。スピーカー未接続なら aplay が黙って失敗するだけで、
-  **pi-say の失敗は flyTo を止めない**(確認音声が出ないだけ)。
-- bluealsa の実行ファイル名はこのバージョンでは `bluealsad` ではなく **`bluealsa`**。
-  override に `bluealsad` と書くと 203/EXEC で起動しない。
+  (`aplay: audio open error: 524`)。USB マイクは capture 専用。よって `pi-say` の既定
+  `plughw:0,0` は使えず、**Bluetooth (bluealsa) が唯一の出力経路**。スピーカー未接続なら
+  aplay が黙って失敗するだけで、**pi-say の失敗は flyTo を止めない**(確認音声が出ないだけ)。
+- **bluealsa は `-p a2dp-source` だけにする**。既定で付いてくる `a2dp-sink` / `hfp-ag` /
+  `hsp-ag` は「Pi がスピーカーや通話機になる」**逆向きの用途**で、有効にすると SCO リンクが
+  張られて存在しない入力が流れ続け、**スピーカーから雑音が鳴り止まなくなる**。同じ理由で
+  `bluealsa-aplay.service` も disable する(BT 機器の音を Pi のローカルカードで鳴らす常駐)。
+- 実行ファイル名はこのバージョンでは `bluealsad` ではなく **`bluealsa`**。override に
+  `bluealsad` と書くと 203/EXEC で起動しない。
+- **ALSA の `plug` に変換させると歪む**。A2DP sink は 48kHz ステレオ固定で、piper の
+  22050Hz モノラルを再生時に変換すると「ビッビー」と鳴る。`defaults.pcm.rate_converter` を
+  `speexrate_medium` にしても直らない=リサンプラの質ではなく**変換が課す周期**の問題。
+  解は変換を再生経路から外すこと: `pi-say` に `PI_SAY_RATE=48000 PI_SAY_CHANNELS=2` を渡すと
+  **sox で事前変換してキャッシュ**するので、再生は変換なしの `btspk_raw` への素通しになる。
+  初回だけ変換コストを払い、以降はむしろ速い。※sox は出力の形式を拡張子で決めるので、
+  キャッシュの `.tmp` 名に書くには `-t wav` が要る(無いと exit 2)。
 - マイクは C-Media PCM2902 = README の表の CHANGEEK と同型。`plughw:CARD=Device,DEV=0` の
   arecord 経路がそのまま使える(card 名が `Device` なので unit を書き換えずに済む)。
+- **マイクの調整は「自分で音を出して自分で録る」**。スピーカーが繋がっているなら、
+  `pi-say` で喋らせて `arecord` で拾えば、人手なしで利得としきい値を実測できる。
+  実測値(Adafruit 3367 mini USB mic、`Mic` 12=17.85dB、AGC off、50cm): 発話 RMS 0.267 /
+  静穏部 0.009 = **29.8 倍**。既定のしきい値 0.08 のままで良い。
+  ※人に話してもらう測定は、指示がブロッキングする ssh の stdout に埋もれて**相手に届かない**。
+  無音を録っていることに気づかず、距離や AGC を疑って何往復も無駄にした。
 
 ## ASR / LLM エンジン比較(pi4 = Cortex-A72, dotprod 無し)での知見
 

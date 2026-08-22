@@ -10,6 +10,15 @@
 # replayed, so the wake->confirm latency drops to an aplay. Each unique phrase
 # costs exactly one small WAV on the SD (negligible wear); set PI_SAY_NO_CACHE=1
 # to bypass. Voice = tsukuyomi (cute), spoken a touch slow for an unhurried feel.
+#
+# PI_SAY_RATE/PI_SAY_CHANNELS resample the result before caching it. Needed for
+# Bluetooth: an A2DP sink runs at a fixed rate (48 kHz stereo here) and letting
+# ALSA's `plug` convert piper's 22050 Hz mono on the fly buzzes audibly, whatever
+# rate_converter is configured -- the artefact is periodic, so it is the timing
+# that conversion imposes rather than the resampler. Converting once, into the
+# cache, removes the conversion from the playback path entirely: what is cached
+# is exactly what the sink wants, and playback becomes a straight copy. Leave
+# unset for a device that takes 22050 mono directly.
 set -u
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 
@@ -17,7 +26,9 @@ PIPER="${PIPER_BIN:-$HOME/piper-tts/piper/bin/piper}"
 CACHE_DIR="${PI_SAY_CACHE_DIR:-$HOME/piper-tts/say-cache}"
 MODEL="tsukuyomi"
 RATE="1.25"            # length_scale: higher = slower / more relaxed
-DEV="plughw:0,0"       # 3.5mm jack (card 0)
+DEV="${PI_SAY_DEVICE:-plughw:0,0}"   # 3.5mm jack (card 0); btspk_raw on a Pi 5
+OUT_RATE="${PI_SAY_RATE:-}"          # resample the cached WAV to this (Hz)
+OUT_CH="${PI_SAY_CHANNELS:-}"        # ...and to this many channels
 TEXT=""
 
 while [ $# -gt 0 ]; do
@@ -28,6 +39,7 @@ while [ $# -gt 0 ]; do
     -h|--help)
       echo "usage: pi-say [--rate N] [--model M] [--device D] \"text\"   (or pipe text via stdin)"
       echo "  --rate N   speech length_scale (default 1.25; bigger = slower)"
+      echo "env: PI_SAY_DEVICE / PI_SAY_RATE / PI_SAY_CHANNELS (resample into the cache)"
       exit 0;;
     *) TEXT="$TEXT $1"; shift;;
   esac
@@ -43,8 +55,25 @@ fi
 
 synth_to() {
   # $1 = output wav path. Returns piper's exit status.
+  #
+  # When an output rate/channel count is asked for, synthesise to a temporary
+  # and resample into place, so the cached file is already in the sink's format
+  # and nothing converts at playback time. sox rather than ALSA's plug: the
+  # point is to do this once, off the playback path, with a proper resampler.
+  if [ -z "$OUT_RATE" ] && [ -z "$OUT_CH" ]; then
+    "$PIPER" --model "$MODEL" --length_scale "$RATE" --text "$TEXT" \
+      --output_file "$1" >/dev/null 2>&1
+    return
+  fi
+  raw="$1.raw.wav"
   "$PIPER" --model "$MODEL" --length_scale "$RATE" --text "$TEXT" \
-    --output_file "$1" >/dev/null 2>&1
+    --output_file "$raw" >/dev/null 2>&1 || { rm -f "$raw"; return 1; }
+  # -t wav: the destination is the cache's ".tmp" staging name, and sox picks
+  # the output format from the extension, so without this it just fails.
+  sox "$raw" ${OUT_RATE:+-r "$OUT_RATE"} ${OUT_CH:+-c "$OUT_CH"} -t wav "$1" 2>/dev/null
+  st=$?
+  rm -f "$raw"
+  return $st
 }
 
 if [ -n "${PI_SAY_NO_CACHE:-}" ]; then
@@ -54,7 +83,8 @@ if [ -n "${PI_SAY_NO_CACHE:-}" ]; then
 else
   mkdir -p "$CACHE_DIR"
   # Key on everything that changes the audio. md5 of UTF-8 bytes is fine for JA.
-  KEY="$(printf '%s\x1f%s\x1f%s' "$MODEL" "$RATE" "$TEXT" | md5sum | cut -d' ' -f1)"
+  KEY="$(printf '%s\x1f%s\x1f%s\x1f%s\x1f%s' \
+          "$MODEL" "$RATE" "$OUT_RATE" "$OUT_CH" "$TEXT" | md5sum | cut -d' ' -f1)"
   WAV="$CACHE_DIR/$KEY.wav"
   if [ ! -s "$WAV" ]; then
     # Synthesise to a temp in the cache dir, then rename (atomic on one fs, so a
