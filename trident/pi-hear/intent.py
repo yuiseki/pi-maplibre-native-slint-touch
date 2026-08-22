@@ -153,8 +153,16 @@ def parse(text):
 
 # --- the fast path -----------------------------------------------------------
 
-_CLEAR = re.compile(r"\b(remove|clear|hide|take off|delete)\b|消し|消して|クリア|非表示")
-_SHOW = re.compile(r"\b(show|add|display|put|find)\b|表示|出して|見せて|追加")
+# re.I is not decoration. The recogniser capitalises the first word of every
+# utterance and punctuates the end, so "Add restaurants on map." is what
+# arrives, and \badd\b does not match it. Written and tested against typed
+# lower-case text, these rules matched nothing anyone actually said.
+_CLEAR = re.compile(
+    r"\b(remove|clear|hide|take off|get rid of|delete)\b"
+    r"|消し|消して|クリア|非表示", re.I)
+_SHOW = re.compile(
+    r"\b(show|add|display|put|find|need|want|looking for|where is|where are"
+    r"|where can i)\b|表示|出して|見せて|追加|ある\?|どこ", re.I)
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -336,18 +344,42 @@ def grammar():
 BIN = "/usr/local/bin/"
 
 
+# How long the voice loop will wait for the model. The resident server answers
+# in about 0.8s; anything much beyond that means it is loading or gone, and a
+# person standing in front of the map should get silence rather than a pause.
+VOICE_TIMEOUT = 5.0
+
+# At least this many letters or digits before it is worth asking Nominatim.
+_NAME_RE = re.compile(r"[^\W_]{2,}", re.UNICODE)
+
+
+def _is_a_name(place):
+    """Whether a place slot holds something worth looking up.
+
+    Real: whisper returned "Take me to..." for a sentence that trailed off, and
+    the model answered show_place with place "...". Asking a geocoder for "..."
+    can only waste the time it takes to fail.
+    """
+    return bool(place) and bool(_NAME_RE.search(place))
+
+
 def for_voice(transcript):
     """What the voice loop should run, or None to stay silent.
 
-    Rules only. The voice loop cannot spend nine seconds in the middle of an
-    utterance, and a sentence that matches no rule is better left alone than
-    guessed at -- this moves someone's map for them.
+    Rules first -- the phrases people actually use should not pay for a round
+    trip. Then the resident model, which costs about 0.8s now that it is not
+    reloading itself on every call; before that it was 5.6s and this path had to
+    be rules-only. A sentence neither can read is left alone: guessing moves
+    someone's map for them.
     """
     result = by_rule(transcript)
     if result is None:
+        answer = by_server(transcript, timeout=VOICE_TIMEOUT)
+        result = parse(answer) if answer else None
+    if result is None or result["intent"] == "unknown":
         return None
     name = result["intent"]
-    if name == "show_place" and result["place"]:
+    if name == "show_place" and _is_a_name(result["place"]):
         return {"tool": "pi-geocode", "args": ["--fly", result["place"]],
                 "timeout": 30, "intent": result}
     if name == "show_poi" and result["category"]:

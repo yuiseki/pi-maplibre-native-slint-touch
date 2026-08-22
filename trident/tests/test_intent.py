@@ -177,6 +177,60 @@ Exiting...
                          "unknown")
 
 
+class RealTranscriptTest(unittest.TestCase):
+    """Every string here is what whisper-base actually returned on the deck.
+
+    The rules were written against what a person types and tested the same way,
+    so they were all lower case and none of them ended in a full stop. The
+    recogniser capitalises the first word and punctuates: "Add restaurants on
+    map." did not match \badd\b, and every spoken command failed while every
+    test passed.
+    """
+
+    HEARD = [
+        # (transcript, intent, category) -- transcripts verbatim from the log
+        ("Add restaurants on map.", "show_poi", "restaurant"),
+        ("Hide the restaurant.", "clear_poi", "restaurant"),
+        # "remove cafes from map" misheard. A rule that reads "Remeber" as
+        # "remove" is a rule that will read other things wrongly too; this is
+        # for the model to attempt, not the rules to guess.
+        ("Remeber cafe is on map.", None, None),
+        ("I need to toilet.", "show_poi", "toilet"),
+        ("Show cafes on map", "show_poi", "cafe"),
+        ("Get the leader of everything on the map.", None, None),
+        ("So Cafe's on map", None, None),
+        ("light-dryer and bottle.", None, None),
+    ]
+
+    def test_what_was_actually_heard(self):
+        for text, want_intent, want_cat in self.HEARD:
+            r = intent.by_rule(text)
+            if want_intent is None:
+                self.assertIsNone(r, "%r should not have matched: %r"
+                                  % (text, r))
+                continue
+            self.assertIsNotNone(r, "%r matched nothing" % text)
+            self.assertEqual(r["intent"], want_intent, text)
+            self.assertEqual(r["category"], want_cat, text)
+
+    def test_a_capitalised_verb_matches(self):
+        self.assertIsNotNone(intent.by_rule("Add restaurants on map."))
+        self.assertIsNotNone(intent.by_rule("SHOW CAFES ON MAP"))
+
+    def test_a_trailing_full_stop_does_not_break_a_place(self):
+        r = intent.by_rule("Show me the map of Reykjavik.")
+        self.assertEqual(r["intent"], "show_place")
+        self.assertEqual(r["place"].rstrip("."), "Reykjavik")
+
+    def test_need_and_want_are_requests_to_show(self):
+        # "I need a toilet" is the natural phrasing and contains no verb from
+        # the original list.
+        for text in ("I need a toilet", "I want a coffee", "looking for a bank"):
+            r = intent.by_rule(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "show_poi", text)
+
+
 class PromptTest(unittest.TestCase):
     def test_the_prompt_names_every_allowed_intent(self):
         p = intent.build_prompt("show cafes")
@@ -335,16 +389,72 @@ class VoiceDispatchTest(unittest.TestCase):
         # Silence is the right answer; guessing moves someone's map for them.
         self.assertIsNone(intent.for_voice("what is the weather like"))
 
-    def test_the_model_is_never_woken_here(self):
-        # for_voice must be a rule-only path. If it ever reaches the model this
-        # returns after several seconds, mid-utterance.
+    def test_rules_answer_without_touching_the_model(self):
+        # The common phrases must not pay for a round trip.
         import time as _t
         t0 = _t.time()
-        intent.for_voice("a sentence that matches nothing at all")
-        self.assertLess(_t.time() - t0, 0.5)
+        self.assertIsNotNone(intent.for_voice("show cafes on map"))
+        self.assertLess(_t.time() - t0, 0.2)
+
+    def test_the_model_is_asked_when_the_rules_decline(self):
+        # It costs 0.8s now rather than 5.6s, which is affordable mid-utterance
+        # and is the difference between understanding a sentence and not.
+        calls = []
+
+        def fake(text, base=None, timeout=None):
+            calls.append((text, timeout))
+            return '{"intent":"show_place","place":"Reykjavik","category":""}'
+
+        real, intent.by_server = intent.by_server, fake
+        try:
+            d = intent.for_voice("Take me to Reykjavik, would you")
+        finally:
+            intent.by_server = real
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(d["tool"], "pi-geocode")
+
+    def test_the_model_gets_a_short_leash(self):
+        # A server that is loading, or gone, must not hold the voice loop.
+        seen = []
+
+        def fake(text, base=None, timeout=None):
+            seen.append(timeout)
+            return ""
+
+        real, intent.by_server = intent.by_server, fake
+        try:
+            self.assertIsNone(intent.for_voice("something unmatched entirely"))
+        finally:
+            intent.by_server = real
+        self.assertTrue(seen and seen[0] is not None and seen[0] <= 6)
+
+    def test_a_place_of_punctuation_is_not_a_place(self):
+        # Real: whisper returned "Take me to..." for a sentence that trailed
+        # off, and the model dutifully answered show_place with place "...".
+        # Asking Nominatim for "..." is a query that can only waste time.
+        for junk in ("...", ".", "?", "  ", "-", "…"):
+            real, intent.by_server = intent.by_server, (
+                lambda *a, **k: json.dumps(
+                    {"intent": "show_place", "place": junk, "category": ""}))
+            try:
+                self.assertIsNone(intent.for_voice("take me to " + junk), junk)
+            finally:
+                intent.by_server = real
+
+    def test_a_real_place_still_passes(self):
+        real, intent.by_server = intent.by_server, (
+            lambda *a, **k: '{"intent":"show_place","place":"Reykjavik","category":""}')
+        try:
+            self.assertIsNotNone(intent.for_voice("take me to Reykjavik"))
+        finally:
+            intent.by_server = real
 
     def test_show_poi_without_a_category_does_nothing(self):
-        self.assertIsNone(intent.for_voice("show something on the map"))
+        real, intent.by_server = intent.by_server, lambda *a, **k: ""
+        try:
+            self.assertIsNone(intent.for_voice("show something on the map"))
+        finally:
+            intent.by_server = real
 
 
 if __name__ == "__main__":
