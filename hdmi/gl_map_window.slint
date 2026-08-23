@@ -277,10 +277,18 @@ export component MapWindow inherits Window {
                     // fit. Eliding by width belongs here rather than in C++,
                     // which can only count codepoints and would cut a
                     // proportional font at an arbitrary pixel position.
-                    width: 80px;
+                    //
+                    // 88px is the whole gap to the battery icon: "No internet"
+                    // is wider than any SSID here and was being elided at 80.
+                    width: 88px;
                     height: 100%;
-                    visible: root.wifi-ssid != "";
-                    text: root.wifi-ssid;
+                    visible: root.net-state != 2 || root.wifi-ssid != "";
+                    // The icon already goes grey, and grey is easy to miss on a
+                    // sunlit deck. Say it in words instead. Whenever there is no
+                    // route this is the fact worth the space -- including
+                    // net-state 1, associated to an AP with no way out, which is
+                    // the state most likely to be misread as working.
+                    text: root.net-state == 2 ? root.wifi-ssid : "No internet";
                     overflow: elide;
                     color: white;
                     font-size: 14px;
