@@ -69,7 +69,7 @@ class WhisperCppEngine(Engine):
     name = "whisper"
 
     def __init__(self, binary, model, language="ja", prompt=None, threads=4,
-                 audio_ctx=512, beam_size=1):
+                 audio_ctx=0, beam_size=5):
         if not os.path.exists(binary):
             raise FileNotFoundError(f"whisper binary not found: {binary}")
         if not os.path.exists(model):
@@ -79,11 +79,24 @@ class WhisperCppEngine(Engine):
         self.language = language
         self.prompt = prompt
         self.threads = threads
-        # audio_ctx caps the encoder context (1500 ≈ 30s). For short utterances
-        # 512 (~10s) cuts compute ~3x AND avoids the decoder hallucinating from
-        # the silent tail of the padded 30s window (verified on a Pi 4: tiny
-        # went 5.4s/garbage → 1.8s/correct). beam_size=1 = greedy. See
-        # whisper.cpp discussions/166.
+        # audio_ctx caps the encoder context (1500 ≈ 30s); 0 leaves it whole.
+        #
+        # 512 was measured on a Pi 4 running tiny, where it went 5.4s/garbage
+        # to 1.8s/correct. That result did not survive the move to a Pi 5
+        # running base, and nobody re-measured. Same recordings, 2026-08-23:
+        #
+        #   base  -ac 512 -bs 1   0.7s   0/6 right
+        #   base  full    -bs 5   1.9s   4/6
+        #   small-q8_0 full -bs 5 4.3s   5/6
+        #
+        # "show hotels in Shinjuku" came back as "show hot abs in Shinjuku",
+        # and four attempts at "language mode Japanese" produced four
+        # different manglings, none containing the word "language". All of it
+        # was the truncated context, not the model: base gets them right at
+        # full context. Rules were being written to work around this.
+        #
+        # So the defaults now buy accuracy, and a host too slow for it can
+        # still pass --whisper-ac. See whisper.cpp discussions/166.
         self.audio_ctx = audio_ctx
         self.beam_size = beam_size
 
@@ -99,7 +112,11 @@ class WhisperCppEngine(Engine):
                 w.writeframes(pcm.tobytes())
             cmd = [self.binary, "-m", self.model, "-f", wav_path,
                    "-l", self.language, "-nt", "-np", "-t", str(self.threads),
-                   "-ac", str(self.audio_ctx), "-bs", str(self.beam_size)]
+                   "-bs", str(self.beam_size)]
+            # Omitted rather than passed as 0: the flag's own default is the
+            # full window, and asking for zero context is not the same request.
+            if self.audio_ctx:
+                cmd += ["-ac", str(self.audio_ctx)]
             if self.prompt:
                 cmd += ["--prompt", self.prompt]
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

@@ -169,11 +169,15 @@ def main():
     ap.add_argument("--whisper-prompt", default="トライデント",
                     help="initial prompt to bias whisper toward domain words "
                          "('' to disable)")
-    ap.add_argument("--whisper-ac", type=int, default=512,
-                    help="whisper encoder audio context (1500≈30s; 512≈10s is "
-                         "~3x faster and avoids silence-hallucination on short clips)")
-    ap.add_argument("--whisper-bs", type=int, default=1,
-                    help="whisper beam size (1 = greedy, fastest)")
+    ap.add_argument("--whisper-ac", type=int, default=0,
+                    help="whisper encoder audio context (0 = the whole 30s "
+                         "window, the default; 512≈10s is ~3x faster and was "
+                         "what a Pi 4 running tiny needed). On a Pi 5 running "
+                         "base, 512 got 0 of 6 real utterances right and the "
+                         "full window got 4 -- see engines.py")
+    ap.add_argument("--whisper-bs", type=int, default=5,
+                    help="whisper beam size (1 = greedy and ~10%% faster, but "
+                         "it is what turned 'show hotels' into 'show hot abs')")
     ap.add_argument("--threads", type=int, default=4,
                     help="whisper.cpp inference threads (Pi 4 has 4 cores)")
     # wake word

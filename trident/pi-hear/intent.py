@@ -229,6 +229,15 @@ _LANG_EN = re.compile(
     r"(japanese|english|nihongo)\b", re.I)
 # The phrase alone, with the language name lost. See _other_language.
 _LANG_EN_BARE = re.compile(r"\blanguage\s*mode\b", re.I)
+
+# A switch that failed to parse must not become somewhere to fly to. The map
+# jumping to "Rangage" and "Languise" is how these attempts announced
+# themselves, which is worse than nothing happening: it loses the view as well
+# as the command. This one is not a transcription workaround -- it is a guard
+# against the model answering "show_place" for a sentence that was plainly
+# trying to do something else.
+_LANG_ATTEMPT = re.compile(
+    r"\bmode\b|\bswitch\b|\bspeak\b|\blangu|言語|げんご|ゲンゴ|モード", re.I)
 # whisper-base does not write 言語モード in kanji. Real transcripts of the same
 # spoken phrase: ゲンゴモード, げんごモード, 言語モード. The language names come
 # back both ways too (英語 / エイゴ). Written against the kanji a person types,
@@ -441,6 +450,15 @@ def by_rule(transcript, lang=None):
         out = _empty("clear_poi")
         out["category"] = category
         return out
+    # "show me the map of Hotel California" contains a category word, but the
+    # sentence says plainly that it is naming a place. The explicit phrasing
+    # wins over a word that happens to be in the category list.
+    if category and not here and _PLACE_OF.search(text):
+        m = _PLACE_OF.search(text)
+        out = _empty("show_place")
+        out["place"] = m.group(1).strip(" .")
+        return out
+
     poi_place = None if here else _poi_place(text, category)
     if category and (_SHOW.search(text) or here or poi_place):
         # "cafes near me" and 「台東区のカフェ」have no verb at all. A category
@@ -629,12 +647,18 @@ def for_voice(transcript, lang=None):
     someone's map for them.
     """
     result = by_rule(transcript, lang=lang)
+    from_rule = result is not None
     if result is None:
         answer = by_server(transcript, timeout=VOICE_TIMEOUT)
         result = parse(answer) if answer else None
     if result is None or result["intent"] == "unknown":
         return None
     name = result["intent"]
+    if (name == "show_place" and not from_rule
+            and _LANG_ATTEMPT.search(transcript)):
+        # The model's guess at a mangled "language mode ..." is a place name
+        # every time, and acting on it throws the map across the world.
+        return None
     if name == "show_place" and _is_a_name(result["place"]):
         # Pins belong to the place they were found in. Cafes shown in Hiroshima
         # stayed on screen when the map moved, which made "show Hiroshima" look
