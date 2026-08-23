@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""pi-gps : read a USB NMEA GPS (e.g. u-blox 7) and publish position.
+
+Writes "<lat> <lon> <fix> <sats_used> <sats_in_view>" to /dev/shm/pi-gps
+(tmpfs = RAM, no microSD wear) on every GGA fix. fix is the NMEA quality
+(0=no fix, 1=GPS, 2=DGPS); sats_used is from GGA (0 until fixed); sats_in_view
+is from GSV (useful while acquiring); lat/lon hold the last known position. Reads /dev/serial/by-id/*GPS* only -- never a bare /dev/ttyACM*, so other USB
+serial devices are left alone (set PI_GPS_DEV to override); the user only needs
+to be in the dialout group (no sudo).
+Dependency-light: parses NMEA directly, no pyserial/gpsd. Ctrl-C to quit.
+
+Runs harmlessly with no GPS attached: while no device is present (or after an
+unplug / re-enumeration) it stops publishing, so /dev/shm/pi-gps goes stale.
+Consumers then distinguish states by freshness -- a stale file means "no GPS",
+a fresh fix=0 line means "device present, still acquiring", fix>=1 means a fix.
+The device is re-probed once a second, so hot-plugging a receiver is picked up
+automatically without a restart.
+"""
+import os, sys, glob, time
+
+OUT = "/dev/shm/pi-gps"
+
+
+BY_ID = "/dev/serial/by-id"
+# Only a receiver whose by-id name says GPS is opened. There is deliberately no
+# bare /dev/ttyACM* fallback: those numbers are shared with every other USB
+# serial gadget (ESP32 boards, Meshtastic nodes), and adopting one both wedges
+# its port for its real owner and feeds us garbage instead of NMEA. Set
+# PI_GPS_DEV to force a path for a receiver whose by-id name omits "GPS".
+PATTERNS = ("*GPS*", "*gps*", "*GNSS*", "*gnss*", "*u-blox*", "*u_blox*")
+
+
+def find_dev():
+    forced = os.environ.get("PI_GPS_DEV")
+    if forced:
+        return forced if os.path.exists(forced) else None
+    for pat in PATTERNS:
+        g = sorted(glob.glob(os.path.join(BY_ID, pat)))
+        if g:
+            return g[0]
+    return None
+
+
+def open_dev(path):
+    """Open the receiver without letting it become our controlling terminal.
+
+    Without O_NOCTTY the first tty a session leader opens becomes its ctty, and
+    an unplug then delivers SIGHUP. systemd starts us in our own session, so we
+    are that session leader: the hangup killed us on every unplug and systemd
+    quietly restarted us -- which is how this unit reached a restart counter of
+    106 (2026-07-28).
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOCTTY)
+    return os.fdopen(fd, "r", errors="ignore")
+
+
+def nmea_ok(line):
+    if len(line) < 4 or line[0] != "$" or "*" not in line:
+        return False
+    body, _, cks = line[1:].partition("*")
+    try:
+        want = int(cks[:2], 16)
+    except ValueError:
+        return False
+    x = 0
+    for ch in body:
+        x ^= ord(ch)
+    return x == want
+
+
+def dm_to_deg(val, hemi):
+    if not val:
+        return None
+    try:
+        f = float(val)
+    except ValueError:
+        return None
+    d = int(f / 100)
+    deg = d + (f - d * 100) / 60.0
+    return -deg if hemi in ("S", "W") else deg
+
+
+def publish(lat, lon, fix, sats, inview):
+    tmp = OUT + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            fh.write("%.6f %.6f %d %d %d\n" % (lat, lon, fix, sats, inview))
+        os.replace(tmp, OUT)
+    except OSError:
+        pass
+
+
+def main():
+    tty = sys.stdout.isatty()
+    lat = lon = 0.0
+    fix = sats = inview = 0
+    dev = find_dev()
+    print("pi-gps: %s -> %s%s"
+          % (dev or "no device", OUT, "   (Ctrl-C to quit)" if tty else ""))
+    if tty:
+        print("")
+        print("")
+    while True:
+        if not dev:
+            # No device: stop publishing so /dev/shm/pi-gps goes stale and the
+            # consumer shows "no GPS" (distinct from a fresh fix=0 = acquiring).
+            # Re-probe every second so a hot-plugged receiver is picked up.
+            time.sleep(1.0)
+            dev = find_dev()
+            if dev:
+                print("pi-gps: %s -> %s" % (dev, OUT))
+            continue
+        try:
+            with open_dev(dev) as f:
+                for line in f:
+                    line = line.strip()
+                    if not nmea_ok(line):
+                        continue
+                    p = line.split(",")
+                    typ = p[0][3:]
+                    if typ == "GSV" and len(p) >= 4:
+                        # total satellites in view (field 3); useful while
+                        # acquiring, before any are used in a fix.
+                        try:
+                            inview = int(p[3] or 0)
+                        except ValueError:
+                            pass
+                    elif typ == "GGA" and len(p) >= 8:
+                        try:
+                            fix = int(p[6] or 0)
+                        except ValueError:
+                            fix = 0
+                        try:
+                            sats = int(p[7] or 0)
+                        except ValueError:
+                            sats = 0
+                        la, lo = dm_to_deg(p[2], p[3]), dm_to_deg(p[4], p[5])
+                        if la is not None and lo is not None:
+                            lat, lon = la, lo
+                        publish(lat, lon, fix, sats, inview)
+                        if tty:
+                            sys.stdout.write(
+                                "\033[2A\r\033[2K fix=%d used=%d inview=%d  lat=%.6f lon=%.6f\n"
+                                % (fix, sats, inview, lat, lon))
+                            sys.stdout.write("\033[2K -> %s\n" % OUT)
+                            sys.stdout.flush()
+            # Clean EOF: the port closed (typically an unplug). Drop it and
+            # let the no-device branch wait + re-probe.
+            dev = None
+        except OSError as e:
+            # Device vanished (unplug / re-enumeration). Don't spin on the dead
+            # handle -- drop the stale path so the no-device branch waits and
+            # re-probes; a replugged receiver is then found automatically.
+            if tty:
+                print("pi-gps: device gone (%s); waiting..." % e)
+            dev = None
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nbye")
