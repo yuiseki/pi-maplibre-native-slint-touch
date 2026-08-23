@@ -14,6 +14,7 @@
 #   REF     upstream ref to build against (default: the PR #68 merge commit)
 #   REPO    upstream URL
 #   SYNC    1 to move an existing checkout onto REF (default: leave it alone)
+#   OVERLAY_ONLY  1 to copy the sources and stop (used by the tests)
 set -eu
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"            # the hdmi/ dir
@@ -44,10 +45,32 @@ else
   echo "== using existing checkout: $(git -C "$WORK" rev-parse --short HEAD) =="
 fi
 
+# Copy only what actually differs. An unconditional cp changes every mtime on
+# every run, so ninja rebuilds the world -- and, far worse, sees CMakeLists.txt
+# as modified and re-runs CMake's configure. See the note on configuring below
+# for why that is dangerous here; the cheapest way to never trigger it is to
+# leave the file alone when it has not changed.
+copied=0
+unchanged=0
+put() {
+  local src="$1" dst="$2"
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    unchanged=$((unchanged + 1))
+    return
+  fi
+  cp "$src" "$dst"
+  copied=$((copied + 1))
+}
+
 echo "== overlay app sources from $HERE onto $WORK/cpp =="
-cp "$HERE/main_gl.cpp" "$HERE/gl_map_window.slint" "$WORK/cpp/"
-cp "$HERE/src/"*.hpp "$HERE/src/"*.cpp "$WORK/cpp/src/"
-cp "$HERE/platform/"*.hpp "$HERE/platform/"*.cpp "$WORK/cpp/platform/"
+put "$HERE/main_gl.cpp" "$WORK/cpp/main_gl.cpp"
+put "$HERE/gl_map_window.slint" "$WORK/cpp/gl_map_window.slint"
+for f in "$HERE/src/"*.hpp "$HERE/src/"*.cpp; do
+  [ -e "$f" ] && put "$f" "$WORK/cpp/src/$(basename "$f")"
+done
+for f in "$HERE/platform/"*.hpp "$HERE/platform/"*.cpp; do
+  [ -e "$f" ] && put "$f" "$WORK/cpp/platform/$(basename "$f")"
+done
 
 # ...and the target definition that lists them. Overlaying sources without it
 # means a new file is copied but never compiled, and the failure arrives as an
@@ -61,23 +84,45 @@ if grep -qF "$MARK" "$CM"; then
   # about not being a standalone project, which does not apply once inlined).
   awk '/^if\(MLN_WITH_OPENGL/{s=1} s' "$HERE/CMakeLists.txt" \
       | sed "1i $MARK" >> "$CM.tmp"
-  mv "$CM.tmp" "$CM"
-  echo "== overlaid the maplibre-slint-gl target definition =="
+  if cmp -s "$CM.tmp" "$CM"; then
+    rm -f "$CM.tmp"
+    unchanged=$((unchanged + 1))
+  else
+    mv "$CM.tmp" "$CM"
+    copied=$((copied + 1))
+    echo "== overlaid the maplibre-slint-gl target definition =="
+  fi
 else
   echo "WARN: could not find the target banner in $CM; not overlaying it" >&2
 fi
+
 # Screensaver assets (@image-url paths in gl_map_window.slint resolve relative
 # to the .slint file, i.e. cpp/assets/).
 mkdir -p "$WORK/cpp/assets"
-cp "$HERE/assets/"* "$WORK/cpp/assets/" 2>/dev/null || true
+for f in "$HERE/assets/"*; do
+  [ -e "$f" ] && put "$f" "$WORK/cpp/assets/$(basename "$f")"
+done
+
+if [ "$copied" = "0" ]; then
+  echo "== overlay: all $unchanged files unchanged (nothing to regenerate) =="
+else
+  echo "== overlay: $copied changed, $unchanged unchanged =="
+fi
+
+# Used by the tests: everything above is pure file shuffling and can be checked
+# anywhere; everything below needs the build host.
+[ "${OVERLAY_ONLY:-0}" = "1" ] && exit 0
 
 # Configure only when there is nothing to reuse. Re-configuring an already
 # working tree is not free here: at this pinned ref Slint is fetched from the
 # moving release/1 branch, so CMake's update step tries to rebase the local
 # checkout onto whatever upstream Slint is today and dies in merge conflicts --
 # leaving the tree needing a regeneration that then fails on every build too.
-# FETCHCONTENT_UPDATES_DISCONNECTED stops that update step; RECONFIGURE=1
-# forces the configure when a flag really has to change.
+# FETCHCONTENT_UPDATES_DISCONNECTED stops that update step -- but FetchContent
+# also honours a per-dependency FETCHCONTENT_UPDATES_DISCONNECTED_<NAME>, which
+# takes precedence over the global one. An existing cache here was found with
+# the global ON and _SLINT still OFF, i.e. protected in name only, so both are
+# set. RECONFIGURE=1 forces the configure when a flag really has to change.
 if [ ! -f "$WORK/build/CMakeCache.txt" ] || [ "${RECONFIGURE:-0}" = "1" ]; then
   echo "== configure (OpenGL backend + FemtoVG GL + libseat linuxkms) =="
   # OpenGL_GL_PREFERENCE=GLVND: maplibre-native links mbgl-core against
@@ -90,7 +135,8 @@ if [ ! -f "$WORK/build/CMakeCache.txt" ] || [ "${RECONFIGURE:-0}" = "1" ]; then
     -DOpenGL_GL_PREFERENCE=GLVND \
     -DMLN_WITH_OPENGL=ON -DMLN_WITH_WEBGPU=OFF -DMLN_WITH_GLFW=OFF \
     -DSLINT_FEATURE_RENDERER_FEMTOVG=ON -DSLINT_FEATURE_BACKEND_LINUXKMS=ON \
-    -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+    -DFETCHCONTENT_UPDATES_DISCONNECTED=ON \
+    -DFETCHCONTENT_UPDATES_DISCONNECTED_SLINT=ON
 else
   echo "== reusing existing configuration in $WORK/build =="
 fi
