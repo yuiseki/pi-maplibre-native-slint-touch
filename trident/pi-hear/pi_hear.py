@@ -24,6 +24,7 @@ import queue
 import subprocess
 import sys
 import threading
+import wave
 import time
 
 import numpy as np
@@ -193,6 +194,14 @@ def main():
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute",
                     help="while this file exists, drop all audio (half-duplex: "
                          "pi-say creates it during playback so we don't self-hear)")
+    ap.add_argument("--record-dir",
+                    default=os.environ.get("PI_HEAR_RECORD_DIR", ""),
+                    help="save every utterance here as a wav, so two "
+                         "recognisers can be compared on the same audio. "
+                         "Off by default: this is a microphone in someone's "
+                         "room. Defaults from PI_HEAR_RECORD_DIR so it can be "
+                         "turned on for a session without editing the unit's "
+                         "ExecStart")
     ap.add_argument("--saver-file", default="/dev/shm/pi-saver-stage",
                     help="map writes its screensaver stage here (0=active, >=1 idle)")
     ap.add_argument("--saver-pause-stage", type=int, default=1,
@@ -391,6 +400,24 @@ def main():
             tag = "WAKE" if matched else "----"
             print(f"{tag} s={score:.2f} '{text}'", flush=True)
 
+    def _keep_utterance(directory, samples, rate):
+        """Write one utterance to a wav, named by the clock. Never fatal."""
+        try:
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(
+                directory, time.strftime("%Y%m%d-%H%M%S") + ".wav")
+            pcm = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
+            with wave.open(path, "wb") as fh:
+                fh.setnchannels(1)
+                fh.setsampwidth(2)
+                fh.setframerate(int(rate))
+                fh.writeframes((pcm * 32767.0).astype("<i2").tobytes())
+        except Exception as exc:                        # noqa: BLE001
+            # Recording is a debugging aid. Losing it must not cost the deck
+            # its ears.
+            print(f"[record] {exc}", file=sys.stderr)
+
+
     def transcribe_worker():
         # Transcription runs OFF the capture loop. The whisper engine takes
         # ~2 s/utterance; if that ran inline, the capture loop would stall and
@@ -414,6 +441,13 @@ def main():
             except OSError:
                 pass
             publish_state("asr", hold=120.0, override=True)
+            # Keep the audio when asked to. Every comparison of one recogniser
+            # against another so far has been argued from typed strings or from
+            # TTS, and both lie: the tsukuyomi voice is not a person at a
+            # microphone, and neither is a sentence somebody wrote down. This
+            # is how the same utterance gets fed to two models.
+            if args.record_dir:
+                _keep_utterance(args.record_dir, samples, sr)
             try:
                 text = engine.transcribe(samples, sr)
             finally:

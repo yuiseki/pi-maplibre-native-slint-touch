@@ -139,6 +139,10 @@ def main():
                     help="leave the camera alone instead of fitting the results")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+    # Whether --radius was actually given, so that sizing a named place does
+    # not silently override the caller.
+    radius_given = any(a == "--radius" or a.startswith("--radius=")
+                       for a in sys.argv[1:])
 
     if args.category == "clear":
         # Both, and in this order: a layer file left behind would put the
@@ -152,6 +156,8 @@ def main():
         return 0
 
     lat = lon = None
+    place = None
+    source = "given"
     if len(args.where) >= 2:
         try:
             lat, lon = float(args.where[0]), float(args.where[1])
@@ -164,9 +170,18 @@ def main():
                   file=sys.stderr)
             return 1
         lat, lon = place.lat, place.lon
-        with open(FLYTO, "w") as fh:
-            fh.write(place.flyto_line() + "\n")
-    source = "given"
+        # Size the search to the place. A ward is not a point: the default
+        # 1500m around the centre of 新宿区 misses most of the ward, and around
+        # the centre of 東京都 it lands in an arbitrary field. Only when the
+        # radius was not asked for explicitly -- an explicit --radius is the
+        # caller saying they know better.
+        if not radius_given:
+            sized = place.radius_m()
+            if sized:
+                args.radius = sized
+                source = "place"
+        # No flyTo here: the fit below goes to the results, which is a better
+        # answer than the place's own centre and is where they actually are.
     if lat is None and args.here:
         # Skip the map's last flyTo: "cafes near me" means the ground under the
         # deck, and the map may have been sent somewhere else entirely.
@@ -220,14 +235,19 @@ def main():
         fitted = ", fit z%d" % zoom
 
     n = len(lines.splitlines()) if lines else 0
+    # Say when the answer was cut short. 200 hotels in 台東区 is the limit
+    # talking, not the ward, and a count that silently means "at least this
+    # many" is the kind of number people go on to reason with.
+    capped = " (capped at %d)" % args.limit if n >= args.limit else ""
     if args.json:
         print(json.dumps({"category": key, "lat": lat, "lon": lon,
                           "radius": args.radius, "count": n,
                           "from": source, "slot": geo.colour_slot(key),
+                          "capped": bool(capped),
                           "layers": sorted(read_layers())}))
     else:
-        print("%d %s around %.4f %.4f (r=%dm, from %s%s) [on the map: %s]"
-              % (n, key, lat, lon, args.radius, source, fitted,
+        print("%d%s %s around %.4f %.4f (r=%dm, from %s%s) [on the map: %s]"
+              % (n, capped, key, lat, lon, args.radius, source, fitted,
                  ", ".join(sorted(read_layers())) or "nothing"))
     return 0
 

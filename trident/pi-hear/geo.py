@@ -202,16 +202,44 @@ def _best(results):
     return max(nearby, key=key) if nearby else best
 
 
+# How wide a POI search around a named place may be, in metres. The floor
+# keeps a single building from returning nothing; the ceiling is what stops
+# "hotels in Tokyo" from meaning the whole prefecture -- Nominatim happily
+# resolves 東京都, and a search that size is neither answerable nor useful.
+PLACE_RADIUS_MIN = 400
+PLACE_RADIUS_MAX = 6000
+
+
 @dataclass
 class Place:
     lat: float
     lon: float
     zoom: int
     name: str
+    # The place's own extent, when Nominatim gave one. A ward is not a point:
+    # searching 1.5km around the centre of 新宿区 misses most of it, and
+    # searching 1.5km around the centre of 東京都 lands in an arbitrary field.
+    south: float = None
+    north: float = None
+    west: float = None
+    east: float = None
 
     def flyto_line(self):
         """The line /dev/shm/pi-map-flyto wants: 'lat lon zoom'."""
         return "%.6f %.6f %d" % (self.lat, self.lon, self.zoom)
+
+    def radius_m(self, lo=PLACE_RADIUS_MIN, hi=PLACE_RADIUS_MAX):
+        """A search radius that covers this place, bounded at both ends.
+
+        Half the north-south extent, which for anything roughly square is the
+        radius that covers it. Bounded because the two ends are both real: a
+        neighbourhood can be 200m across, and a prefecture is not a place you
+        can enumerate hotels in.
+        """
+        if self.south is None or self.north is None:
+            return None
+        metres = abs(self.north - self.south) * 111320.0 / 2.0
+        return int(max(lo, min(hi, metres)))
 
 
 def parse_nominatim(body):
@@ -238,16 +266,20 @@ def parse_nominatim(body):
     except (TypeError, ValueError):
         rank = 16
     bbox = r.get("boundingbox")
+    south = north = west = east = None
     if bbox and len(bbox) == 4:
         try:
-            s, n, w, e = (float(x) for x in bbox)
-            zoom = max(zoom_for_bbox(s, n, w, e), _zoom_floor(rank))
+            south, north, west, east = (float(x) for x in bbox)
+            zoom = max(zoom_for_bbox(south, north, west, east),
+                       _zoom_floor(rank))
         except (TypeError, ValueError):
+            south = north = west = east = None
             zoom = 12
     else:
         zoom = max(12, _zoom_floor(rank))
     zoom = min(zoom, MAX_ZOOM)
-    return Place(lat, lon, zoom, r.get("display_name", ""))
+    return Place(lat, lon, zoom, r.get("display_name", ""),
+                 south, north, west, east)
 
 
 # What a person is likely to say -> the OSM tag that means it. Kept small and

@@ -307,6 +307,21 @@ _NET_OFF = re.compile(
     r"|^\s*(?:オフライン|オフグリッド)(?:モード)?(?:に(?:して|します)?)?[。\.]?\s*$",
     re.I)
 
+# "hotels in Shinjuku" -- a category and a place in one sentence. Without this
+# the place was dropped and the search ran wherever the map happened to be,
+# which after "show Tokyo" is the middle of the prefecture: the answer looked
+# like the deck could only think in prefectures, when in fact Nominatim resolves
+# 台東区 and 浅草 perfectly well and was simply never asked.
+_POI_IN_EN = re.compile(
+    r"\b(?:in|near|around|at)\s+(?:the\s+)?"
+    r"([A-Za-zÀ-ɏ][A-Za-zÀ-ɏ0-9'.-]*(?:[ -][A-Za-zÀ-ɏ][A-Za-zÀ-ɏ0-9'.-]*){0,3})"
+    r"\s*[.!?]?\s*$", re.I)
+# 「新宿のホテル」-- the place comes first and の joins them. The lookahead pins
+# the match to the last の, and the run before it may not itself contain one,
+# so 「東京の新宿のホテル」takes 新宿: the nearer and narrower of the two, and the
+# one a person means. Without excluding の from the run it captured 東京の新宿.
+_POI_NO_JA = re.compile(r"((?:(?!の)[぀-ヿ一-鿿A-Za-z0-9])+)の(?=[^の]*$)")
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -321,6 +336,41 @@ def _find_category(text):
         if word in low:
             return _geo.canonical_category(word)
     return None
+
+
+def _poi_place(text, category):
+    """A place named alongside a category, or None.
+
+    "near me" is handled by the `here` flag and never gets here, so anything
+    this finds is somewhere else: a ward, a neighbourhood, a station.
+    """
+    m = _POI_IN_EN.search(text)
+    if m:
+        name = m.group(1).strip(" .")
+        # "cafes in the area" and "hotels near here" name no place.
+        if name.lower() not in ("area", "here", "me", "town", "city",
+                                "the area", "map", "range", "view"):
+            return name
+    # Japanese: strip the category word first, so 「新宿のホテル」leaves 新宿の
+    # and the last の is the one that joins them.
+    ja = text
+    if _geo is not None:
+        for word in sorted(_geo.CATEGORIES, key=len, reverse=True):
+            if not word.isascii() and word in ja:
+                ja = ja.split(word)[0]
+                break
+    m = _POI_NO_JA.search(ja)
+    if m:
+        name = m.group(1)
+        # A verb ending swept up by the noun class ("表示して") is not a place.
+        if len(name) >= 2 and not _NOT_A_PLACE_JA.search(name):
+            return name
+    return None
+
+
+# Fragments that arrive in front of の but are not somewhere: 「このへんのカフェ」
+# is the `here` flag's business, and 「近くの」likewise.
+_NOT_A_PLACE_JA = re.compile(r"^(?:この|その|あの|ここ|そこ|近く|周辺|付近|今|いま)")
 
 
 def _other_language(lang):
@@ -391,12 +441,16 @@ def by_rule(transcript, lang=None):
         out = _empty("clear_poi")
         out["category"] = category
         return out
-    if category and (_SHOW.search(text) or here):
-        # "cafes near me" has no verb at all; being anchored here is enough to
-        # say it is a request rather than a mention.
+    poi_place = None if here else _poi_place(text, category)
+    if category and (_SHOW.search(text) or here or poi_place):
+        # "cafes near me" and 「台東区のカフェ」have no verb at all. A category
+        # with somewhere attached -- here, or a named place -- is already a
+        # request; requiring a verb dropped exactly the sentences people use
+        # when they have a place in mind.
         out = _empty("show_poi")
         out["category"] = category
         out["here"] = here
+        out["place"] = poi_place or ""
         return out
 
     m = _PLACE_OF.search(text)
@@ -593,6 +647,12 @@ def for_voice(transcript, lang=None):
                 "intent": result, "clear_pins": True}
     if name == "show_poi" and result["category"]:
         args = (["--here"] if result.get("here") else []) + [result["category"]]
+        # A named place goes through as pi-poi's positional argument, which
+        # geocodes it and sizes the search to it. Guarded by the same name test
+        # as show_place: the model answers "..." for a sentence that trailed
+        # off, and looking that up can only waste the time it takes to fail.
+        if not result.get("here") and _is_a_name(result.get("place")):
+            args = args + result["place"].split()
         return {"tool": "pi-poi", "args": args,
                 "timeout": 120, "intent": result}
     if name == "clear_poi":
