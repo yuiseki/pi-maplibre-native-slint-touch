@@ -32,9 +32,14 @@ INTENTS = ("show_place", "show_poi", "clear_poi", "show_here",
 # model that mishears a sentence as "cut the network" takes the deck off the
 # air, and the person who has to notice that is standing in front of a screen
 # that looks fine. Both of these are rules-only, and deliberately so.
+# show_here joins them. It is four fixed phrasings -- 現在地, いまどこ,
+# "where am I", "show current location" -- so the rules catch every real one,
+# and what the model adds is guesses: 「フィルスの表示して」, which is what
+# 「広島を表示して」came back as once, was answered show_here and jumped the map
+# to the GPS position. A wrong guess that moves the map is worse than a shrug.
 MODEL_INTENTS = tuple(n for n in INTENTS
                       if n not in ("set_language", "disconnect_net",
-                                   "zoom_to"))
+                                   "zoom_to", "show_here"))
 
 # Category words are geo's business; asking it keeps one list, not two.
 try:
@@ -350,6 +355,24 @@ _POI_NO_JA = re.compile(r"((?:(?!の)[぀-ヿ一-鿿A-Za-z0-9])+)の(?=[^の]*$)
 # them it becomes a search for every station near Hiroshima. The verb is what
 # says otherwise.
 _ZOOM_JA = re.compile(r"^\s*(.+?)\s*(?:に|へ|を)?\s*ズーム")
+
+# 「京都駅を表示して」is not 京都 and not "every station near Kyoto". It is one
+# named thing, and it reaches it by the same Overpass lookup as ズーム -- the
+# verb was never what made 広島駅 a place, the 駅 was.
+#
+# Only for a name that is longer than the suffix, so that 「駅を表示して」on its
+# own stays a category search: with nothing in front of it, "station" is what
+# was asked for.
+# The name may not run across a particle: 「地図に駅を表示して」is a category
+# search near the map, and without this it became a search for a place called
+# 「地図に駅」. 「東京の駅」is the same shape and the same answer.
+_NAME_CHAR = r"(?:(?![にをへのはがもとで])[぀-ヿ一-鿿A-Za-z0-9])"
+
+_NAMED_FEATURE_JA = re.compile(
+    r"(" + _NAME_CHAR + r"{2,}?"
+    r"(?:駅|空港|港|城|大学|病院|公園|神社|寺|会議場|美術館|博物館|球場|"
+    r"タワー|ドーム|スタジアム))"
+    r"\s*(?:を|に|へ)?\s*(?:表示|ひょうじ|見せ|行き|いき|移動)")
 _ZOOM_EN = re.compile(
     r"\bzoom\s+(?:in\s+)?(?:to|on|into|at)\s+(?:the\s+)?(.+?)\s*[.!?]?\s*$",
     re.I)
@@ -401,6 +424,8 @@ def is_zoom_request(text):
     it gets here: that table finds 広島 inside 広島駅 and flies to the city,
     which is the wrong half of the sentence.
     """
+    if _NAMED_FEATURE_JA.search(str(text)):
+        return True
     m = _ZOOM_JA.search(str(text)) or _ZOOM_EN.search(str(text))
     if not m:
         return False
@@ -492,6 +517,11 @@ def by_rule(transcript, lang=None):
         return _empty("disconnect_net")
 
     # Before the category rules, for the reason above.
+    m = _NAMED_FEATURE_JA.search(text)
+    if m:
+        out = _empty("zoom_to")
+        out["place"] = m.group(1)
+        return out
     m = _ZOOM_JA.search(text) or _ZOOM_EN.search(text)
     if m:
         name = m.group(1).strip(" 　.,、。")

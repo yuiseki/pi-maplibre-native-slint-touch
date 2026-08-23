@@ -37,14 +37,41 @@ FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
 GPS = os.environ.get("PI_POI_GPS", "/dev/shm/pi-gps-lastfix")
 
 # Near first, then wide. 30km covers a city and its suburbs, which is what
-# "the station" means when you are looking at a city. 300km is the second
-# guess, and is already slow enough that a third would not be worth waiting
-# through -- past that, name the city too.
-RADII = (30000, 300000)
+# "the station" means when you are looking at a city.
+#
+# 400km is the second guess, chosen by measurement rather than roundness:
+# Hiroshima to Kyoto is 311km, and at 300km 「京都駅にズームして」from Hiroshima
+# found nothing while the same words in Kyoto worked.
+#
+# Treat it as a hint, not a bound. This Overpass honours `around` strictly for
+# the tag-filtered query (東京 as a railway=station is refused at 400km from
+# Hiroshima, correctly) and loosely for the plain name query (東京駅 comes back
+# from 682km away). Why is not understood. It does not matter much, because
+# pick() sorts by distance from where the map is looking, so a leak costs a
+# slower query rather than a wrong answer -- the nearest match still wins.
+RADII = (30000, 400000)
 
 # The layer these land in, so that "clear the map" takes them off with
 # everything else rather than leaving one orphan pin behind.
 LAYER = "zoom"
+
+# OSM Japan does not put 駅 in a station's name. 京都駅 is tagged name=京都 with
+# railway=station, and asking for the name as spoken finds nothing at all --
+# not at 300km, not at 1000km. 広島駅 does match, but only because tram and bus
+# stops beside it are named that way; the station itself is name=広島.
+#
+# So when the name as spoken finds nothing, drop the suffix and ask for the
+# kind of thing instead. The suffix is what says which kind.
+SUFFIX_TAGS = {
+    "駅": ("railway", "station"),
+    "空港": ("aeroway", "aerodrome"),
+    "港": ("amenity", "ferry_terminal"),
+    "大学": ("amenity", "university"),
+    "城": ("historic", "castle"),
+    "神社": ("amenity", "place_of_worship"),
+    "寺": ("amenity", "place_of_worship"),
+    "公園": ("leisure", "park"),
+}
 
 
 def ask_overpass(query, timeout=60):
@@ -54,13 +81,36 @@ def ask_overpass(query, timeout=60):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+def quote(s):
+    """Escape for Overpass QL. The name came out of a microphone and QL is a
+    language; a stray quote is a syntax error at best."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def find_named(name, lat, lon, radius, timeout=60):
     """Features with exactly this name within `radius` of lat/lon."""
-    # Quoted and escaped: the name came from a microphone, and Overpass QL is
-    # a language. A stray quote would otherwise be a syntax error at best.
-    safe = name.replace("\\", "\\\\").replace('"', '\\"')
     q = ('[out:json][timeout:%d];nwr["name"="%s"](around:%d,%.6f,%.6f);'
-         'out center 20;' % (timeout, safe, radius, lat, lon))
+         'out center 20;' % (timeout, quote(name), radius, lat, lon))
+    return _ask(q, timeout)
+
+
+def find_by_kind(name, lat, lon, radius, timeout=60):
+    """The suffix says what kind of thing; the rest is the name it is filed
+    under. Returns [] when the name has no suffix we know."""
+    for suffix, (key, value) in SUFFIX_TAGS.items():
+        if not name.endswith(suffix) or len(name) <= len(suffix):
+            continue
+        stem = name[:-len(suffix)]
+        q = ('[out:json][timeout:%d];nwr["%s"="%s"]["name"="%s"]'
+             '(around:%d,%.6f,%.6f);out center 20;'
+             % (timeout, key, value, quote(stem), radius, lat, lon))
+        found = _ask(q, timeout)
+        if found:
+            return found
+    return []
+
+
+def _ask(q, timeout):
     try:
         return ask_overpass(q, timeout=timeout + 10).get("elements", [])
     except Exception as exc:                       # noqa: BLE001
@@ -129,9 +179,16 @@ def main():
         lat, lon = here[0], here[1]
 
     found = None
+    elements = []
     for radius in ([args.radius] if args.radius else RADII):
-        elements = find_named(name, lat, lon, radius)
-        found = pick(elements, lat, lon)
+        # The name as spoken first: when it is filed that way, it is the exact
+        # answer. Only then the kind-of-thing fallback, which is looser by
+        # construction -- there is more than one 京都 in Kyoto.
+        for lookup in (find_named, find_by_kind):
+            elements = lookup(name, lat, lon, radius)
+            found = pick(elements, lat, lon)
+            if found:
+                break
         if found:
             used = radius
             break

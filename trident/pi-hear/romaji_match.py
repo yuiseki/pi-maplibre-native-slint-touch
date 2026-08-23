@@ -160,10 +160,16 @@ def find_place(text):
 # going to be guessable, and a table of the four spellings would have been the
 # fifth thing patched by hand this week.
 #
-# Two edits of budget on a long reading (hakubutsukan) and one on a short one,
-# same shape as place_thresh. The floor matters more here than there, because
-# eki is three letters and three letters turn up inside anything.
-CATEGORY_THRESH = 0.34
+# The budget for a long reading. 0.34 was two edits on a six-letter word, and
+# two edits from hoteru is honoru: 「ホノルルを表示して」became a hotel search.
+# 0.2 is one edit on six letters and still two and a half on hakubutsukan,
+# which is the shape wanted -- long words can afford proportional slack, six
+# letters cannot.
+#
+# Nothing is lost by tightening: every category that has ever been matched on
+# this path was matched exactly. The evidence for fuzzy matching is all in the
+# short readings, えき against いき, and those go through the branch below.
+CATEGORY_THRESH = 0.2
 SHORT_CATEGORY_LEN = 6
 
 # ...and for the short ones the reading alone is not enough. Within one edit of
@@ -200,9 +206,17 @@ def find_category(text, categories):
     best = None
     best_d = 1.0
     for word, value in categories.items():
+        # Japanese synonyms only. Romanising the English names and comparing
+        # them to a Japanese sentence is how 「パリを表示して」became a park
+        # search: pariwo against parkwo is one edit. The English names are for
+        # English sentences, which never reach here -- the caller only calls
+        # this for text with kana or kanji in it, and there the Japanese word
+        # is the one that was spoken.
+        if word.isascii():
+            continue
         w = to_romaji(word)
         if len(w) < 3:
-            continue                       # atm, bar: too short to risk
+            continue                       # too short to risk
         if len(w) >= SHORT_CATEGORY_LEN:
             needles = (w,)
         else:
