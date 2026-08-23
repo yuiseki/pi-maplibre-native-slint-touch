@@ -42,9 +42,54 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 | `bin/say-muted` | pi-say を half-duplex 化(再生中は pi-hear をミュートして自己集音回避) |
 | `bin/pi-flyto` | 地図IPC クライアント。`pi-flyto hiroshima` 等で `/dev/shm/pi-map-flyto` に書く |
 | `bin/pi-net` | Wi-Fi 状態表示 / 再接続 / 時限切断(`pi-net disconnect [秒]`。復帰を切断より先に予約する) |
+| `bin/pi-offgrid` | 音声から届く時限オフライン。`pi-net disconnect` に 60 秒を渡し、復帰後に音声で報告する。音声で届くものは引数を一つに絞り範囲外を拒否する(10〜600秒)。`--stay` は**通さない**: 音声で無人機をネットから切り離せる経路はいずれ必ず事故る |
 | `bin/pi-kbd` | Bluetooth キーボード(CardKB2)を**Pi 内蔵の無線**で掴む。接続確立の数秒だけ Wi-Fi 送信電力を絞る(下記) |
 | `../hdmi/main_gl.cpp` | 地図アプリ(C++/Slint/femtovg-GL)。**flyTo IPC タイマー + render-pause** を追加済み |
 | `experiments/` | エンジン比較・LLM校正・意図抽出の検証スクリプト(雑) |
+
+## 音声コマンド一覧
+
+| したいこと | 日本語 | English | 実行されるもの |
+|---|---|---|---|
+| 場所へ移動 | 広島を表示して | show the map of Hiroshima | `pi-geocode --fly` |
+| 現在地へ | 現在地 / いまどこ | where am I / show current location | `pi-here` |
+| 地図の場所で検索 | 地図にカフェを表示して | show cafes on map | `pi-poi <category>` |
+| 自機の周りで検索 | 近くのカフェ | cafes near me | `pi-poi --here <category>` |
+| マーカーを消す | 地図をクリアして / リセットして | clear the map / reset | `pi-poi clear` |
+| 言語切替 | 言語モード 英語 | language mode Japanese | `pi-lang` |
+| オフライン実演 | インターネットを切断して | disconnect internet / go offline | `pi-offgrid 60` |
+
+### オフライン実演を音声から
+
+このデッキが答えられることは全部 SSD の上にある(地図タイル、Overpass、Nominatim、
+whisper、意図解析の LLM)。それを示す一番速い方法はネットワークを取り上げて何も
+変わらないのを見せることなので、音声コマンドにした。
+
+安全側の設計が三つある。
+
+- **秒数は固定**。音声からは 60 秒しか頼めない。`pi-offgrid` 自体は 10〜600 秒を
+  受けるが、範囲外は拒否する。マイクに向かって言った言葉でデッキが何分不通になるかが
+  決まってよいはずがない。
+- **`--stay` は通さない**。`pi-net` にはある。音声からは無い。無人機を恒久的に
+  ネットから切り離せる経路は、いずれ必ず誤認識で踏まれる。
+- **モデルには渡さない**。`disconnect_net` は `MODEL_INTENTS` に入っておらず、
+  GBNF にも出てこず、`parse()` が返り値として受け付けない。0.5B のモデルが
+  聞き間違いでネットを切ったとき、画面は正常に見えたままで、気づく人がいない。
+  `set_language` と同じ理由の、もう一段強い版。
+
+復帰は `pi-net` が切断より**先に**予約する(`systemd-run --on-active`)。予約に
+失敗したら切断しない。復帰の 20 秒後に `pi-offgrid --announce` が実際に繋がったかを
+`nmcli` で確認してから喋る。繋がっていなければ繋がっていないと言う。戻れていない
+デッキに「戻りました」と言わせるのは、黙っているより悪い。
+
+実測(pi5-deck, 2026-08-23):
+
+```
+16:30:03  reconnect scheduled in 60s (systemd unit pi-net-reconnect)
+16:30:03  disconnecting wlan0 ...
+16:31:03  wifi: connected SSID=pi5-w-1 signal=66% ch=6   gw ping: OK
+16:31:28  pi-offgrid-announce -> 「オンラインに戻りました。」
+```
 
 ## Bluetooth キーボードと Wi-Fi の共存(pi5-deck)
 

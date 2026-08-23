@@ -22,13 +22,18 @@ import subprocess
 # The whole vocabulary. Anything else the model invents is refused: acting on a
 # made-up intent is worse than admitting the sentence was not understood.
 INTENTS = ("show_place", "show_poi", "clear_poi", "show_here",
-           "set_language", "unknown")
+           "set_language", "disconnect_net", "unknown")
 
 # What the model is allowed to answer. set_language is deliberately not on the
 # list: switching languages is exactly the mistake a 0.5B model must not be
 # able to make, because the deck then stops understanding the person telling it
 # to switch back. The phrasings are fixed and the rules catch them outright.
-MODEL_INTENTS = tuple(n for n in INTENTS if n != "set_language")
+# disconnect_net is off the list for the same reason, one step further: a
+# model that mishears a sentence as "cut the network" takes the deck off the
+# air, and the person who has to notice that is standing in front of a screen
+# that looks fine. Both of these are rules-only, and deliberately so.
+MODEL_INTENTS = tuple(n for n in INTENTS
+                      if n not in ("set_language", "disconnect_net"))
 
 # Category words are geo's business; asking it keeps one list, not two.
 try:
@@ -104,6 +109,23 @@ def reply_for_language(lang):
     return _LANG_REPLY.get(lang, _LANG_REPLY["ja"])
 
 
+# Said before the network goes down, so it has to carry the one fact that
+# matters: this ends by itself. Somebody who does not know that is going to
+# reach for the power button.
+_OFFGRID_REPLY = {
+    "ja": "インターネットを%d秒切断します。自動で戻ります。",
+    "en": "Going off grid for %d seconds. I will come back on my own.",
+}
+
+# What the voice command asks for. Not a free number: nothing said to a
+# microphone should be able to choose how long the deck is unreachable.
+OFFGRID_SECONDS = 60
+
+
+def reply_for_offgrid(lang, seconds=OFFGRID_SECONDS):
+    return _OFFGRID_REPLY.get(lang, _OFFGRID_REPLY["ja"]) % seconds
+
+
 def _empty(intent_name="unknown"):
     out = {"intent": intent_name}
     for slot in SLOTS:
@@ -125,7 +147,11 @@ def _coerce(doc):
         else:
             return None
     name = str(doc.get("intent", "")).strip().lower()
-    if name not in INTENTS:
+    # MODEL_INTENTS, not INTENTS: this only ever reads a model's answer, and
+    # the two intents held back from it are held back here too. The grammar
+    # already forbids them, but a grammar is a request and this is a check --
+    # by_server falls back to an unconstrained call when llama-server is down.
+    if name not in MODEL_INTENTS:
         return _empty()
     out = _empty(name)
     for slot in SLOTS:
@@ -243,6 +269,26 @@ _CLEAR_ALL = re.compile(
     r"|^(?:クリア|リセット)(?:して|します)?[。\.]?$"
     r"|(?:クリア|リセット)して", re.I)
 
+# Going off the air on purpose. This is the off-grid demonstration: everything
+# the deck answers with -- the map, Overpass, Nominatim, whisper, the model --
+# is on the SSD, and the way to show that is to take the network away and watch
+# nothing change.
+#
+# A network word is required. "disconnect" alone is a word people say to each
+# other, and the cost of being wrong here is a deck that vanishes off the
+# network, which is exactly the failure nobody in the room can debug.
+_NET_OFF = re.compile(
+    r"\b(?:disconnect|cut|kill|drop|turn\s+off|shut\s+off|switch\s+off)\s+"
+    r"(?:me\s+)?(?:from\s+)?(?:the\s+)?(?:internet|net|wi-?fi|network)\b"
+    r"|\bgo\s+off\s*-?\s*(?:grid|line)\b"
+    r"|\boff\s*-?\s*(?:grid|line)\s+mode\b"
+    # whisper-base writes the katakana several ways, and drops the particle as
+    # often as not: インターネット切断 / ネットを切断して / ワイファイオフ.
+    r"|(?:インターネット|インタネット|ネットワーク|ネット|ワイファイ|Wi-?Fi|無線)\s*"
+    r"(?:を|から)?\s*(?:切断|遮断|切って|切り|オフ)"
+    r"|^\s*(?:オフライン|オフグリッド)(?:モード)?(?:に(?:して|します)?)?[。\.]?\s*$",
+    re.I)
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -301,6 +347,11 @@ def by_rule(transcript, lang=None):
             out = _empty("set_language")
             out["lang"] = want
             return out
+
+    # Before the category and place rules. "cut the network" names neither, but
+    # nothing downstream should get the chance to read "net" as somewhere to go.
+    if _NET_OFF.search(text):
+        return _empty("disconnect_net")
 
     category = _find_category(text)
     here = bool(_HERE_NEAR.search(text))
@@ -529,6 +580,15 @@ def for_voice(transcript, lang=None):
     if name == "clear_poi":
         return {"tool": "pi-poi", "args": ["clear"],
                 "timeout": 20, "intent": result}
+    if name == "disconnect_net":
+        # speak_first for a different reason than set_language: nothing is
+        # about to kill this process, but the network is about to go away, and
+        # the confirmation is only useful if it arrives before the thing it is
+        # confirming. The timeout covers pi-net's own settling; the return is
+        # scheduled inside pi-offgrid and does not depend on this call.
+        return {"tool": "pi-offgrid", "args": [str(OFFGRID_SECONDS)],
+                "timeout": 60, "intent": result, "speak_first": True,
+                "say": reply_for_offgrid(lang or "ja")}
     if name == "set_language" and result["lang"]:
         # speak_first because taking the new language means restarting pi-hear,
         # which kills the process that would otherwise have spoken afterwards.

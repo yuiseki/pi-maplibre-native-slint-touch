@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# pi-offgrid: take the deck off the network for a fixed time, then come back.
+#
+#   pi-offgrid            60 seconds off, then back on its own
+#   pi-offgrid 120        ...for some other number of seconds
+#   pi-offgrid --announce (internal) say whether we actually made it back
+#
+# This exists as its own tool, rather than as a longer pi-net command line, for
+# the same reason pi-lang does: it is reachable by voice. What a misheard
+# sentence can reach should take one bounded argument and refuse everything
+# else. There is no --stay here at all, because a voice command that can strand
+# a headless deck off the network is a voice command that will eventually do it.
+#
+# pi-net does the work, and schedules the way back BEFORE going down; if it
+# cannot schedule that, it refuses to disconnect, and so do we. What this adds
+# is the spoken bookend: a deck that goes quiet for a minute and returns
+# without saying so leaves the person in front of it guessing whether it is
+# coming back at all.
+#
+# Environment overrides (used by the tests):
+#     PI_OFFGRID_NET        path to pi-net
+#     PI_OFFGRID_SAY        path to pi-say
+#     PI_OFFGRID_SYSTEMDRUN systemd-run command
+#     PI_OFFGRID_NMCLI      nmcli command
+#     PI_OFFGRID_LANG_FILE  where the listening language is kept
+#     PI_OFFGRID_SUDO       override the sudo prefix
+set -u
+
+NET="${PI_OFFGRID_NET:-/usr/local/bin/pi-net}"
+SAY="${PI_OFFGRID_SAY:-/usr/local/bin/pi-say}"
+SYSTEMD_RUN="${PI_OFFGRID_SYSTEMDRUN:-systemd-run}"
+NMCLI="${PI_OFFGRID_NMCLI:-nmcli}"
+LANG_FILE="${PI_OFFGRID_LANG_FILE:-/etc/default/pi-hear-lang}"
+
+SUDO=""
+[ "$(id -u)" != "0" ] && SUDO="sudo -n"
+SUDO="${PI_OFFGRID_SUDO-$SUDO}"
+
+# The shortest useful outage and the longest defensible one. Below ten seconds
+# the reconnect overlaps the disconnect and proves nothing; above ten minutes
+# is not a demonstration, it is an outage, and nothing said to a microphone
+# should be able to ask for one.
+MIN=10
+MAX=600
+DEFAULT=60
+
+# How long after the reconnect fires to check on it. pi-net reconnect rescans,
+# waits, then tries each known AP, so it is not instant.
+SETTLE=20
+
+listening_lang() {
+    local l=""
+    [ -r "$LANG_FILE" ] && l=$(sed -n 's/^PI_HEAR_LANG=//p' "$LANG_FILE" | tail -1)
+    case "$l" in en) echo en ;; *) echo ja ;; esac
+}
+
+announce() {
+    # Only claim to be back if we are. Saying "back online" to a deck that is
+    # still off the air is worse than saying nothing: it sends the person
+    # looking for a problem somewhere else.
+    local lang msg
+    lang=$(listening_lang)
+    if $NMCLI -t -f DEVICE,TYPE,STATE device status 2>/dev/null \
+        | awk -F: '$2=="wifi" && $3=="connected"' | grep -q .; then
+        [ "$lang" = en ] && msg="Back online." || msg="オンラインに戻りました。"
+    else
+        [ "$lang" = en ] && msg="I could not get back on the network." \
+                         || msg="ネットワークに戻れませんでした。"
+    fi
+    "$SAY" "$msg"
+}
+
+if [ "${1:-}" = "--announce" ]; then
+    announce
+    exit 0
+fi
+
+secs="${1:-$DEFAULT}"
+if ! echo "$secs" | grep -qE '^[0-9]+$'; then
+    echo "pi-offgrid: not a number of seconds: '$secs'" >&2
+    exit 2
+fi
+if [ "$secs" -lt "$MIN" ] || [ "$secs" -gt "$MAX" ]; then
+    echo "pi-offgrid: $secs is outside ${MIN}-${MAX}s" >&2
+    exit 2
+fi
+
+[ -x "$NET" ] || { echo "pi-offgrid: no pi-net at $NET" >&2; exit 1; }
+
+# pi-net refuses to disconnect unless it could schedule the reconnect first, so
+# its exit status is the thing to trust here. Go no further without it.
+if ! "$NET" disconnect "$secs"; then
+    echo "pi-offgrid: pi-net would not disconnect; staying on the air" >&2
+    exit 1
+fi
+
+# Secondary, so it comes after: if this fails we are still coming back, just
+# quietly. --collect so a finished run does not sit in the unit list.
+$SUDO $SYSTEMD_RUN --on-active=$((secs + SETTLE)) --unit=pi-offgrid-announce \
+    --collect --description="pi-offgrid: say whether we made it back" \
+    -p "User=${SUDO_USER:-$USER}" -p "Environment=HOME=$HOME" \
+    "$0" --announce >/dev/null 2>&1 \
+    || echo "pi-offgrid: could not schedule the spoken return (coming back anyway)" >&2
+
+echo "off the air for ${secs}s"
