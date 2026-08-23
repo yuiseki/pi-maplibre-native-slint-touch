@@ -44,6 +44,35 @@ class RuleTest(unittest.TestCase):
         ):
             self.assert_offgrid(said)
 
+    def test_what_the_recogniser_actually_returned(self):
+        """Verbatim from the deck's log, 2026-08-23.
+
+        Three attempts at 「インターネットを切断して」, three different spellings,
+        none of them 切断. whisper-base does not have せつだん as 切断 in its
+        Japanese vocabulary and picks a homophone each time. Written against
+        the phrase a person types, the rule matched none of these -- and the
+        model, asked next, turned two of them into clear_poi and wiped the map.
+
+        These stay as fixtures because they are the only evidence of what this
+        sentence really looks like coming out of the recogniser.
+        """
+        for said in (
+            "インターネットを説断して",
+            "インターネットを設断して",
+            "インターネットを接残して",
+        ):
+            self.assert_offgrid(said)
+
+    def test_the_opposite_request_is_not_read_as_this_one(self):
+        # Leaning on the noun rather than the verb is what makes the homophones
+        # work, and it is also what makes this necessary: "connect to the
+        # internet" is the same noun with the same sentence shape.
+        for said in ("インターネットに接続して", "ネットに繋いで",
+                     "オンラインに戻して", "ネットワークにつないで"):
+            r = intent.by_rule(said, lang="ja")
+            if r is not None:
+                self.assertNotEqual(r["intent"], "disconnect_net", repr(said))
+
     def test_japanese(self):
         # whisper-base does not reliably write the particle, and it spells the
         # katakana more than one way. Written against only the phrase a person
@@ -63,11 +92,11 @@ class RuleTest(unittest.TestCase):
             self.assert_offgrid(said)
 
     def test_a_bare_disconnect_is_not_enough(self):
-        # "disconnect" without a network word is a word people say to each
-        # other, and being wrong here takes the deck off the air in front of an
-        # audience. A network word is required.
+        # The noun carries the rule, so the noun is required. "disconnect" and
+        # 「切って」on their own are things people say to each other, and being
+        # wrong here takes the deck off the air in front of an audience.
         for said in ("disconnect", "disconnect me", "cut it out",
-                     "切断", "切って"):
+                     "切断", "切って", "オフにして"):
             r = intent.by_rule(said, lang="ja")
             if r is not None:
                 self.assertNotEqual(r["intent"], "disconnect_net", repr(said))
@@ -75,6 +104,7 @@ class RuleTest(unittest.TestCase):
     def test_it_does_not_eat_a_place_or_a_category(self):
         for said, want in (
             ("show me the map of Internet City", "show_place"),
+            ("回転寿司を表示して", "show_place"),
             ("show cafes on map", "show_poi"),
             ("現在地", "show_here"),
             ("地図をクリアして", "clear_poi"),

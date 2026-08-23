@@ -277,15 +277,33 @@ _CLEAR_ALL = re.compile(
 # A network word is required. "disconnect" alone is a word people say to each
 # other, and the cost of being wrong here is a deck that vanishes off the
 # network, which is exactly the failure nobody in the room can debug.
+# The network word is the only part of the sentence that survives. Everything
+# after it does not: three attempts at「インターネットを切断して」came back as
+#
+#     インターネットを説断して
+#     インターネットを設断して
+#     インターネットを接残して
+#
+# せつだん is not in whisper-base's Japanese vocabulary as 切断, and it picks a
+# different homophone every time. Listing the spellings is a losing game -- so
+# the rule leans on the noun, which came back perfectly all three times, and
+# accepts almost any verb after it. Nothing else on this deck is said about the
+# internet, so the noun plus "do something to it" can only be this.
+_NET_WORD = (r"(?:インターネット|インタネット|ネットワーク|ネット"
+             r"|ワイファイ|Wi-?Fi|無線|回線)")
+
+# ...except the opposite request. "繋いで" is not a command here today, but the
+# day it becomes one it must not be read as its own inverse.
+_NET_ON = re.compile(r"接続|繋(?:い|げ|が)|つない|つなが|オンライン")
+
 _NET_OFF = re.compile(
     r"\b(?:disconnect|cut|kill|drop|turn\s+off|shut\s+off|switch\s+off)\s+"
     r"(?:me\s+)?(?:from\s+)?(?:the\s+)?(?:internet|net|wi-?fi|network)\b"
     r"|\bgo\s+off\s*-?\s*(?:grid|line)\b"
     r"|\boff\s*-?\s*(?:grid|line)\s+mode\b"
-    # whisper-base writes the katakana several ways, and drops the particle as
-    # often as not: インターネット切断 / ネットを切断して / ワイファイオフ.
-    r"|(?:インターネット|インタネット|ネットワーク|ネット|ワイファイ|Wi-?Fi|無線)\s*"
-    r"(?:を|から)?\s*(?:切断|遮断|切って|切り|オフ)"
+    # The noun, then up to a few characters of whatever the recogniser made of
+    # the verb, then any of the ways a request ends.
+    r"|" + _NET_WORD + r"[^。\.]{0,6}?(?:切断|遮断|停止|切って|切り|オフ|断|して|下さい|ください)"
     r"|^\s*(?:オフライン|オフグリッド)(?:モード)?(?:に(?:して|します)?)?[。\.]?\s*$",
     re.I)
 
@@ -350,7 +368,7 @@ def by_rule(transcript, lang=None):
 
     # Before the category and place rules. "cut the network" names neither, but
     # nothing downstream should get the chance to read "net" as somewhere to go.
-    if _NET_OFF.search(text):
+    if _NET_OFF.search(text) and not _NET_ON.search(text):
         return _empty("disconnect_net")
 
     category = _find_category(text)
