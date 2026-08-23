@@ -139,12 +139,38 @@ const MarkerBucket kBuckets[] = {
      "pi-self-stale-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 0.30f},
     {"pi-self", "pi-self-circles",
      "pi-self-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 1.0f},
+    // POI palette, slots 0..7. A place is not a position: it does not go out
+    // of date the way a radio node's last-heard fix does, so these have no
+    // faded twin and never dim. Kept apart from each other so that two
+    // searches on the map at once read as two searches.
+    {"pi-poi-0", "pi-poi-0-circles", "pi-poi-0-labels",   // cafe
+     mbgl::Color{1.00f, 0.62f, 0.11f, 1.0f}, 1.0f},       // orange
+    {"pi-poi-1", "pi-poi-1-circles", "pi-poi-1-labels",   // hotel
+     mbgl::Color{0.61f, 0.36f, 0.90f, 1.0f}, 1.0f},       // violet
+    {"pi-poi-2", "pi-poi-2-circles", "pi-poi-2-labels",   // restaurant
+     mbgl::Color{0.94f, 0.28f, 0.44f, 1.0f}, 1.0f},       // rose
+    {"pi-poi-3", "pi-poi-3-circles", "pi-poi-3-labels",   // convenience
+     mbgl::Color{0.02f, 0.84f, 0.63f, 1.0f}, 1.0f},       // teal
+    {"pi-poi-4", "pi-poi-4-circles", "pi-poi-4-labels",   // toilets
+     mbgl::Color{0.00f, 0.73f, 0.98f, 1.0f}, 1.0f},       // cyan
+    {"pi-poi-5", "pi-poi-5-circles", "pi-poi-5-labels",   // station
+     mbgl::Color{1.00f, 0.82f, 0.20f, 1.0f}, 1.0f},       // amber
+    {"pi-poi-6", "pi-poi-6-circles", "pi-poi-6-labels",   // park
+     mbgl::Color{0.44f, 0.78f, 0.20f, 1.0f}, 1.0f},       // leaf
+    {"pi-poi-7", "pi-poi-7-circles", "pi-poi-7-labels",   // hospital
+     mbgl::Color{0.35f, 0.47f, 0.96f, 1.0f}, 1.0f},       // blue
 };
 constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
+constexpr size_t kPoiBucket0 = 4;      // where the palette starts above
+constexpr size_t kPoiColours = kBucketCount - kPoiBucket0;
 
-// Bucket order: node-stale, node-fresh, self-stale, self-fresh. Later buckets
-// are added later, so the live own position ends up on top.
+// Bucket order: node-stale, node-fresh, self-stale, self-fresh, then the POI
+// palette. Later buckets are added later, so the live own position ends up on
+// top of the radio nodes -- and the POIs, added last, sit above both, which is
+// what you want of the thing you just asked for.
 size_t bucket_of(const SlintMapGL::MeshNode& n) {
+    if (n.colour >= 0)
+        return kPoiBucket0 + (static_cast<size_t>(n.colour) % kPoiColours);
     return (n.self ? 2u : 0u) + (n.stale ? 0u : 1u);
 }
 }  // namespace
@@ -218,10 +244,14 @@ void SlintMapGL::apply_mesh_nodes() {
                 ->setGeoJSON(mbgl::GeoJSON{buckets[i]});
         }
     }
+    size_t poi = 0;
+    for (size_t i = kPoiBucket0; i < kBucketCount; ++i)
+        poi += buckets[i].size();
     std::cout << "[SlintMapGL] markers: " << mesh_nodes_.size() << " ("
               << buckets[1].size() << " node, " << buckets[0].size()
               << " node-stale, " << buckets[3].size() << " self, "
-              << buckets[2].size() << " self-stale)" << std::endl;
+              << buckets[2].size() << " self-stale, " << poi << " poi)"
+              << std::endl;
 }
 
 void SlintMapGL::render() {

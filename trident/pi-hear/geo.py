@@ -46,6 +46,94 @@ def zoom_for_bbox(south, north, west, east):
     return max(MIN_ZOOM, min(MAX_ZOOM, z))
 
 
+# The deck's screen. Only the ratio and the scale matter here, but they are the
+# real numbers so that a different panel is one edit.
+SCREEN_W = 720
+SCREEN_H = 480
+
+
+def fit_zoom(south, north, west, east, width=SCREEN_W, height=SCREEN_H,
+             margin=0.88, max_zoom=MAX_ZOOM):
+    """The largest zoom that still shows the whole box, for fitting results.
+
+    Deliberately not zoom_for_bbox. That one answers "how close may I get to a
+    place I looked up", is about 1.5 levels conservative on purpose, and has
+    floors keyed to how big the place is. This answers "make these markers fill
+    the screen", which wants the real projection: a search for hotels came out
+    at z12 through the other function, four screens wider than the answer.
+
+    Mercator, because latitude does not: a degree of it occupies 1/cos(lat) of
+    the height it would at the equator, and at 34N ignoring that is a fifth of
+    the screen. `margin` leaves the markers off the very edge, where the status
+    bar and a label's halo would sit on them.
+    """
+    def merc_y(lat):
+        lat = max(-85.05, min(85.05, lat))
+        return math.log(math.tan(math.pi / 4.0 + math.radians(lat) / 2.0))
+
+    dlon = abs(east - west)
+    dy = abs(merc_y(north) - merc_y(south))          # radians of mercator y
+    # World size at zoom z: 256*2^z px across, and 2*pi in mercator y.
+    z_lon = (math.log2(width * margin * 360.0 / (256.0 * dlon))
+             if dlon > 1e-9 else MAX_ZOOM)
+    z_lat = (math.log2(height * margin * 2.0 * math.pi / (256.0 * dy))
+             if dy > 1e-9 else MAX_ZOOM)
+    z = int(math.floor(min(z_lon, z_lat)))
+    # max_zoom is a parameter because the ceiling is a property of the basemap,
+    # not of fitting. planet.pmtiles stops at 14 and past it the same tiles are
+    # stretched -- but the markers stay sharp, and a knot of 80 cafes inside
+    # 2km fills 38% of the screen at 14 and the whole of it at 15. Which of
+    # those is worse is a matter of taste, so it is left to the caller.
+    return max(MIN_ZOOM, min(max_zoom, z))
+
+
+def focus_of(lines, keep=0.8, floor=6):
+    """Where the markers actually are: (lat, lon, south, north, west, east).
+
+    The plain bounding box is set by whichever two markers are furthest apart,
+    and a POI search is mostly one dense knot with a few strays around it -- a
+    hotel out by the ring road, a cafe in the next ward. Fitting the box puts
+    the strays on the edges and the answer in a clot in the middle, which is
+    what "show hotels" looked like before this.
+
+    So: the centre is the *median* position rather than the middle of the box,
+    and the extent covers the central `keep` of the markers on each axis. Some
+    markers end up off screen on purpose. That is the trade -- the question was
+    "where are the hotels", and the honest answer is the knot, not the convex
+    hull of the outliers.
+
+    Below `floor` markers there is no distribution to speak of and every one of
+    them matters, so the full box is used.
+    """
+    lats, lons = [], []
+    for line in str(lines).splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            lats.append(float(parts[1]))
+            lons.append(float(parts[2]))
+        except ValueError:
+            continue
+    if not lats:
+        return None
+    lats.sort()
+    lons.sort()
+    n = len(lats)
+
+    def median(v):
+        return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+
+    if n < floor or keep >= 1.0:
+        lo_i, hi_i = 0, n - 1
+    else:
+        drop = (1.0 - keep) / 2.0
+        lo_i = int(math.floor(drop * (n - 1)))
+        hi_i = int(math.ceil((1.0 - drop) * (n - 1)))
+    return (median(lats), median(lons),
+            lats[lo_i], lats[hi_i], lons[lo_i], lons[hi_i])
+
+
 # Types that name somewhere people live, as opposed to a unit of administration
 # drawn around them. A bare place name means the settlement: someone saying
 # "kyoto" means 京都市, not 京都府, even though the prefecture scores higher.
@@ -204,6 +292,61 @@ CATEGORIES = {
     "park": "leisure=park",
     "公園": "leisure=park",
 }
+
+
+# Which colour the map draws a category in. The map has a fixed palette and
+# takes the slot number in the marker id, so the mapping lives here: one list,
+# in the language that already knows what a category is, rather than the same
+# list maintained twice and drifting.
+#
+# Append only, and never reorder. Inserting shifts every colour after it, and a
+# category that changes colour between sessions is worse than one nobody chose.
+# The first few are the ones asked for together -- hotels and cafes at once was
+# the request that started this -- so they land on distinct slots even after
+# the modulo below.
+COLOUR_SLOTS = (
+    "amenity=cafe",
+    "tourism=hotel",
+    "amenity=restaurant",
+    "shop=convenience",
+    "amenity=toilets",
+    "railway=station",
+    "leisure=park",
+    "amenity=hospital",
+    "amenity=bar",
+    "amenity=pub",
+    "amenity=fast_food",
+    "amenity=pharmacy",
+    "amenity=school",
+    "amenity=bank",
+    "amenity=atm",
+    "amenity=fuel",
+    "amenity=parking",
+    "shop=supermarket",
+    "tourism=museum",
+)
+
+# How many colours the map has. Beyond this the slots wrap, so two categories
+# can share a colour -- acceptable, because in practice two or three are on
+# screen at once and the first entries above are the ones that get asked for
+# together.
+COLOUR_COUNT = 8
+
+
+def colour_slot(category):
+    """Which palette slot a category draws in, 0..COLOUR_COUNT-1.
+
+    Anything unknown gets a stable slot from its name rather than a default
+    one: two unrecognised categories sharing the palette's first colour would
+    look like one search.
+    """
+    key = normalise_category(category)
+    tag = CATEGORIES.get(key) if key else None
+    if tag is None:
+        tag = str(category)
+    if tag in COLOUR_SLOTS:
+        return COLOUR_SLOTS.index(tag) % COLOUR_COUNT
+    return sum(ord(c) for c in tag) % COLOUR_COUNT
 
 
 def normalise_category(word):
@@ -365,13 +508,18 @@ def _safe_label(name, fallback):
     return token or fallback
 
 
-def marker_lines(body, epoch, limit=200):
+def marker_lines(body, epoch, limit=200, slot=None):
     """Turn an Overpass answer into the marker feed the map already reads.
 
     The format is the Meshtastic node feed's: '<id> <lat> <lon> <epoch> <name>'.
     Reusing it means POIs appear with no change to the map at all -- and on a
     deck with no radio, nothing else is using it. The ids are prefixed so that
     on a deck that does have one, the two feeds cannot collide.
+
+    `slot` is the palette slot from colour_slot(), written into the id as
+    'poi<slot>-<osmid>'. It goes in the id rather than in a sixth column
+    because the Meshtastic producer writes this same format and does not know
+    about slots, while the id is already opaque to everything downstream.
 
     Silent on malformed input, for the same reason parse_nominatim is.
     """
@@ -395,7 +543,33 @@ def marker_lines(body, epoch, limit=200):
         tags = el.get("tags") or {}
         label = _safe_label(tags.get("name"), tags.get("amenity")
                             or tags.get("shop") or "poi")
-        out.append("poi%s %.6f %.6f %d %s"
-                   % (el.get("id", len(out)), float(lat), float(lon),
-                      int(epoch), label))
+        ident = ("poi%d-%s" % (slot, el.get("id", len(out)))
+                 if slot is not None else "poi%s" % el.get("id", len(out)))
+        out.append("%s %.6f %.6f %d %s"
+                   % (ident, float(lat), float(lon), int(epoch), label))
     return "\n".join(out)
+
+
+def bbox_of(lines):
+    """The bounding box of a block of marker lines, or None if there are none.
+
+    (south, north, west, east). Fed straight to zoom_for_bbox, which is what
+    puts the answer on screen: a search whose results are all outside the
+    current view is indistinguishable from a search that found nothing.
+
+    Antimeridian-naive on purpose. The box that would need it spans half the
+    planet, and at that size the zoom is pinned to the minimum anyway.
+    """
+    lats, lons = [], []
+    for line in str(lines).splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            lats.append(float(parts[1]))
+            lons.append(float(parts[2]))
+        except ValueError:
+            continue
+    if not lats:
+        return None
+    return min(lats), max(lats), min(lons), max(lons)

@@ -108,6 +108,12 @@ public:
         // must not read as current, so stale ones are drawn faded.
         bool stale = false;
         bool self = false;   // this host's own position, drawn in its own colour
+        // Palette slot for a POI marker, or -1 for a radio node. Two searches
+        // can be on the map at once -- hotels and cafes -- and telling them
+        // apart is the whole reason this is here. The producer chooses the
+        // slot (see geo.colour_slot) and writes it into the id; the map only
+        // owns the colours.
+        int colour = -1;
     };
     void set_mesh_nodes(std::vector<MeshNode> nodes);
 

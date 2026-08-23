@@ -9,6 +9,19 @@
 This is the thing behind "show cafes on map". It asks the Overpass running on
 this machine and writes the answer into the marker feed the map already reads,
 so nothing about the map has to change.
+
+Two things it does beyond fetching:
+
+**It moves the camera to the answer.** A search whose results sit outside the
+current view is indistinguishable from one that found nothing, and "show
+hotels" at street zoom finds hotels you cannot see.
+
+**It keeps one category alongside another.** Asking for hotels and then cafes
+leaves both on the map, in different colours, because that is what asking for
+the second one on top of the first means. Searching the same category again
+replaces just that category. The per-category blocks are kept in their own file
+(PI_POI_LAYERS) and the marker feed is rewritten from it, so the feed stays the
+single flat thing the map reads.
 """
 import argparse
 import json
@@ -20,7 +33,10 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "pi-hear"))
-sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+# Appended, not inserted: when this runs from a checkout, the copy beside
+# it above must win. Ahead of it, the installed copy shadowed the repo's
+# and the tests silently exercised whatever was last deployed.
+sys.path.append("/home/yuiseki/src/pi-hear")
 import geo  # noqa: E402
 
 # The environment wins; the file is the default. Read here rather than relying
@@ -40,8 +56,17 @@ def _cfg(name, default):
 OVERPASS = os.environ.get("PI_POI_OVERPASS", "http://127.0.0.1:8002")
 NOMINATIM = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
 MARKERS = os.environ.get("PI_POI_MARKERS", "/dev/shm/pi-mesh-nodes")
+# What is on the map, per category, so that adding one does not erase the last.
+# In /dev/shm with the feed it feeds: both are "what is on screen right now"
+# and neither should survive a reboot.
+LAYERS = os.environ.get("PI_POI_LAYERS", "/dev/shm/pi-poi-layers.json")
 FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
 RADIUS = int(_cfg("PI_POI_RADIUS", "1500"))
+# How close the fit may get. The basemap stops at 14, so past that its tiles
+# are stretched -- the markers stay sharp, and a dense search fills the screen
+# rather than sitting in a knot in the middle of it. Raise it to trade a soft
+# basemap for markers you can tell apart.
+MAX_FIT_ZOOM = int(_cfg("PI_POI_MAX_ZOOM", "14"))
 GPS = os.environ.get("PI_POI_GPS", "/dev/shm/pi-gps-lastfix")
 # A fallback position for a deck with no GPS fix, "lat lon". Unset by default:
 # an unset home means "say you do not know", which is better than showing
@@ -66,6 +91,34 @@ def ask_nominatim(query, base=NOMINATIM, timeout=20):
 
 
 
+def read_layers(path=None):
+    """What is currently on the map, {category: block of lines}.
+
+    Anything unreadable is treated as an empty map rather than an error: this
+    is a cache of what is on screen, and the worst case of getting it wrong is
+    drawing one search instead of two.
+    """
+    try:
+        with open(path or LAYERS) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    return {str(k): str(v) for k, v in doc.items() if v}
+
+
+def write_layers(layers, markers=None, path=None):
+    """Save the per-category blocks and rebuild the flat feed from them."""
+    with open(path or LAYERS, "w") as fh:
+        json.dump(layers, fh)
+    body = "\n".join(block.strip("\n") for block in layers.values()
+                      if block.strip())
+    with open(markers or MARKERS, "w") as fh:
+        fh.write(body + ("\n" if body else ""))
+    return body
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("category", help="cafe, restaurant, toilet, ... or 'clear'")
@@ -74,10 +127,26 @@ def main():
                     help="around the deck itself, not where the map is looking")
     ap.add_argument("--radius", type=int, default=RADIUS, help="metres")
     ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument("--keep", type=float, default=0.8,
+                    help="fraction of the markers the view must cover; the "
+                         "rest are outliers and are allowed off screen "
+                         "(1.0 = fit every one)")
+    ap.add_argument("--max-zoom", type=int, default=MAX_FIT_ZOOM,
+                    help="how close the fit may get (the basemap stops at 14; "
+                         "beyond that its tiles stretch but the markers "
+                         "separate)")
+    ap.add_argument("--no-fit", action="store_true",
+                    help="leave the camera alone instead of fitting the results")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     if args.category == "clear":
+        # Both, and in this order: a layer file left behind would put the
+        # markers straight back the next time anything is added.
+        try:
+            os.unlink(LAYERS)
+        except OSError:
+            pass
         open(MARKERS, "w").close()
         print("cleared")
         return 0
@@ -123,18 +192,43 @@ def main():
         return 2
 
     body = ask_overpass(query)
-    lines = geo.marker_lines(body, int(time.time()), limit=args.limit)
-    with open(MARKERS, "w") as fh:
-        fh.write(lines + ("\n" if lines else ""))
+    key = geo.canonical_category(args.category) or args.category
+    lines = geo.marker_lines(body, int(time.time()), limit=args.limit,
+                             slot=geo.colour_slot(args.category))
+
+    # Replace this category, keep the others. Searching cafes twice should not
+    # leave two overlapping sets of cafes, and should not remove the hotels.
+    layers = read_layers()
+    if lines:
+        layers[key] = lines
+    else:
+        layers.pop(key, None)
+    write_layers(layers)
+
+    # Fit the camera to what was just found, not to everything on the map: the
+    # answer to the question just asked is what should be on screen. Both sets
+    # usually stay visible anyway, because a second search runs from the same
+    # centre and the same radius.
+    fitted = ""
+    focus = geo.focus_of(lines, keep=args.keep)
+    if focus and not args.no_fit:
+        clat, clon, south, north, west, east = focus
+        zoom = geo.fit_zoom(south, north, west, east,
+                            max_zoom=args.max_zoom)
+        with open(FLYTO, "w") as fh:
+            fh.write("%.6f %.6f %d\n" % (clat, clon, zoom))
+        fitted = ", fit z%d" % zoom
 
     n = len(lines.splitlines()) if lines else 0
     if args.json:
-        print(json.dumps({"category": args.category, "lat": lat, "lon": lon,
+        print(json.dumps({"category": key, "lat": lat, "lon": lon,
                           "radius": args.radius, "count": n,
-                          "from": source}))
+                          "from": source, "slot": geo.colour_slot(key),
+                          "layers": sorted(read_layers())}))
     else:
-        print("%d %s around %.4f %.4f (r=%dm, from %s)"
-              % (n, args.category, lat, lon, args.radius, source))
+        print("%d %s around %.4f %.4f (r=%dm, from %s%s) [on the map: %s]"
+              % (n, key, lat, lon, args.radius, source, fitted,
+                 ", ".join(sorted(read_layers())) or "nothing"))
     return 0
 
 

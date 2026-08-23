@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -1390,9 +1391,23 @@ int main(int /*argc*/, char** /*argv*/) {
                             int64_t epoch = 0;
                             if (!(ts >> id >> lat >> lon >> epoch >> name))
                                 continue;
+                            // A POI carries its palette slot in the id, as
+                            // "poi<slot>-<osmid>" (see geo.colour_slot). The
+                            // id is opaque to everything else here, which is
+                            // why the slot rides in it rather than in a sixth
+                            // column: the Meshtastic producer writes this same
+                            // format and knows nothing about slots. A radio
+                            // node, or an older "poi<osmid>" line, gets -1 and
+                            // the colour it always had.
+                            int colour = -1;
+                            if (id.rfind("poi", 0) == 0 && id.size() > 3
+                                && std::isdigit(static_cast<unsigned char>(id[3]))
+                                && id.find('-') == 4) {
+                                colour = id[3] - '0';
+                            }
                             nodes.push_back({id, name, lat, lon,
                                              (now_s - epoch) > marker_stale_secs,
-                                             false});
+                                             false, colour});
                         }
 
                         std::istringstream sf(self_raw_of(raw));
@@ -1401,7 +1416,7 @@ int main(int /*argc*/, char** /*argv*/) {
                         if (sf >> slat >> slon >> sepoch) {
                             nodes.push_back({"self", self_label, slat, slon,
                                              (now_s - sepoch) > marker_stale_secs,
-                                             true});
+                                             true, -1});
                         }
 
                         smap->set_mesh_nodes(std::move(nodes));

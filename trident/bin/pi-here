@@ -18,7 +18,10 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "pi-hear"))
-sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+# Appended, not inserted: when this runs from a checkout, the copy beside
+# it above must win. Ahead of it, the installed copy shadowed the repo's
+# and the tests silently exercised whatever was last deployed.
+sys.path.append("/home/yuiseki/src/pi-hear")
 import geo  # noqa: E402
 
 GPS = os.environ.get("PI_HERE_GPS", "/dev/shm/pi-gps-lastfix")
