@@ -231,7 +231,10 @@ def main():
     # The precedence rules live in hear_state.StatePublisher, which is tested;
     # they are fiddly enough that getting them wrong is invisible until you
     # watch the screen (recognition flickered, the transcription never showed).
-    _pub = hear_state.StatePublisher(args.state_file)
+    # The map captions in whichever language we are listening in; it reads
+    # this from the state file rather than the config, so changing the language
+    # is one restart rather than two that must agree.
+    _pub = hear_state.StatePublisher(args.state_file, lang=args.language)
     _level = hear_state.LevelPublisher(args.level_file, args.threshold)
 
     def publish_state(word, text="", hold=0.0, override=False):

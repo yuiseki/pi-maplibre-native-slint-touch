@@ -178,10 +178,17 @@ static bool map_render_paused() {
     return (rt - m) < 15000;
 }
 
-// pi-hear's state file: line 1 is a word, line 2 an optional caption. Returns
-// false when it is missing or stale -- stale means pi-hear is not running,
-// which must not read the same as pi-hear sitting idle.
-static bool read_hear_state(std::string& word, std::string& text) {
+// pi-hear's state file: line 1 is a word, line 2 an optional caption, line 3
+// the language it is listening in. Returns false when it is missing or stale --
+// stale means pi-hear is not running, which must not read the same as pi-hear
+// sitting idle.
+//
+// The language comes from pi-hear rather than from this side reading the same
+// config, so that switching it is one restart instead of two that have to
+// agree; an older pi-hear writes two lines and the captions stay Japanese,
+// which is what they were.
+static bool read_hear_state(std::string& word, std::string& text,
+                            std::string& lang) {
     struct stat st {};
     if (::stat("/dev/shm/pi-hear-state", &st) != 0)
         return false;
@@ -195,6 +202,8 @@ static bool read_hear_state(std::string& word, std::string& text) {
         return false;
     if (!std::getline(f, text))
         text.clear();
+    if (!std::getline(f, lang) || (lang != "ja" && lang != "en"))
+        lang = "ja";
     return true;
 }
 
@@ -1207,9 +1216,10 @@ int main(int /*argc*/, char** /*argv*/) {
             ++ss->cap_tick;
             bool cap_busy = false;
             if (ss->cap_tick % 4 == 0) {
-                std::string word, text, caption;
+                std::string word, text, caption, lang;
                 int stage = 0;
-                if (read_hear_state(word, text)) {
+                if (read_hear_state(word, text, lang)) {
+                    const bool en = (lang == "en");
                     // "heard" carries the transcription, which is deliberately
                     // not shown: it is usually mangled, it is unreadable at
                     // this size, and it is the machine's business rather than
@@ -1221,11 +1231,11 @@ int main(int /*argc*/, char** /*argv*/) {
                         cap_busy = true;
                         stage = 2;
                         static const char* DOTS[4] = {"", ".", "..", "..."};
-                        caption = std::string("考え中") +
+                        caption = std::string(en ? "Thinking" : "考え中") +
                                   DOTS[(ss->cap_tick / 4) % 4];
                     } else if (word == "armed") {
                         stage = 1;
-                        caption = "お話しください";
+                        caption = en ? "Listening" : "お話しください";
                         cap_busy = true;
                     } else if (word == "speaking") {
                         caption = text;

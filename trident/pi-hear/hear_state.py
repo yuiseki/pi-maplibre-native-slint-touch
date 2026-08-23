@@ -14,16 +14,39 @@ and the loop's updates are dropped until it expires.
 import time
 
 
-class StatePublisher:
-    """Writes `<word>\\n<caption>\\n`, newest interesting state wins."""
+# The map has captions in these two. Anything else -- PI_HEAR_LANG can be
+# 'auto' -- falls back rather than reaching the map as a language it cannot
+# render, which would show an empty caption strip.
+CAPTION_LANGS = ("ja", "en")
+DEFAULT_LANG = "ja"
 
-    def __init__(self, path, clock=time.monotonic):
+
+class StatePublisher:
+    """Writes `<word>\\n<caption>\\n<lang>\\n`, newest interesting state wins.
+
+    The third line is the language, because the captions on screen are the
+    map's and the language is pi-hear's. The map could read PI_HEAR_LANG for
+    itself, but then changing it means restarting both, and forgetting one
+    leaves the deck listening in one language and captioning in another. An
+    older map reads two lines and ignores the third.
+    """
+
+    def __init__(self, path, clock=time.monotonic, lang=None):
         self.path = path
         self.clock = clock
+        self.lang = lang
         self._word = None
         self._text = None
         self._at = 0.0
         self._hold_until = 0.0
+
+    @property
+    def lang(self):
+        return self._lang
+
+    @lang.setter
+    def lang(self, value):
+        self._lang = value if value in CAPTION_LANGS else DEFAULT_LANG
 
     def publish(self, word, text="", hold=0.0, override=False):
         """Publish a state. Returns whether it was actually written.
@@ -46,7 +69,7 @@ class StatePublisher:
         self._hold_until = now + hold if hold > 0.0 else 0.0
         try:
             with open(self.path, "w") as f:
-                f.write(word + "\n" + text + "\n")
+                f.write(word + "\n" + text + "\n" + self._lang + "\n")
         except OSError:
             return False
         return True
