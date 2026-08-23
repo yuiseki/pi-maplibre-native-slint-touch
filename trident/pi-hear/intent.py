@@ -229,6 +229,20 @@ _HERE_NEAR = re.compile(
     r"\bnear\s*(?:me|here|by)\b|\baround\s+(?:me|here)\b"
     r"|近く|この辺|周辺|近所", re.I)
 
+# Clearing without naming what is on the map. Nobody looking at a screenful of
+# pins thinks of them by category first; they think "get this off my map".
+# Requires the map, or a bare "reset"/"clear" -- "remove that" on its own is too
+# easy to say by accident, and "show me the map of Reset" is a place.
+_CLEAR_ALL = re.compile(
+    # A bare "clear"/"reset" only as the whole utterance: anchored at the end
+    # alone it matched the last word of "show me the map of Reset", which is a
+    # place in New Mexico.
+    r"^\s*(?:clear|reset)\s*[.!]?\s*$"
+    r"|\b(?:clear|reset)\s+(?:the\s+)?(?:map|screen|pins?|markers?)\b"
+    r"|(?:地図|マップ|マーカー|ピン)を?(?:クリア|リセット|消し)"
+    r"|^(?:クリア|リセット)(?:して|します)?[。\.]?$"
+    r"|(?:クリア|リセット)して", re.I)
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -296,6 +310,11 @@ def by_rule(transcript, lang=None):
     # cannot turn it into one.
     if not category and _HERE_ONLY.search(text):
         return _empty("show_here")
+
+    # Before the place rules: "clear the map" contains no category and must not
+    # be read as somewhere to fly to.
+    if not category and _CLEAR_ALL.search(text):
+        return _empty("clear_poi")
 
     # Order matters: "remove the cafes shown on the map" contains both verbs,
     # and the one that decides is the one asking for a change.

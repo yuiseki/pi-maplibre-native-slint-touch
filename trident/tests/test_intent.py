@@ -375,6 +375,53 @@ class GoingSomewhereClearsThePinsTest(unittest.TestCase):
         self.assertFalse(d.get("clear_pins"), d)
 
 
+class ClearWithoutNamingWhatTest(unittest.TestCase):
+    """Clearing the map without saying what is on it.
+
+    "remove cafes from map" needs to know it was cafes. Nobody looking at a
+    screenful of pins thinks of them by category first -- they think "get this
+    off my map". Both words mean the same thing here: take the pins down.
+    """
+
+    def test_japanese(self):
+        for text in ("地図をクリアして", "クリアして", "リセットして",
+                     "地図をリセット", "マーカーを消して"):
+            r = intent.by_rule(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "clear_poi", text)
+
+    def test_english(self):
+        for text in ("clear the map", "Clear the map.", "reset the map",
+                     "reset", "clear"):
+            r = intent.by_rule(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "clear_poi", text)
+
+    def test_it_needs_no_category(self):
+        r = intent.by_rule("地図をクリアして")
+        self.assertEqual(r["category"], "")
+
+    def test_naming_a_category_still_works(self):
+        r = intent.by_rule("remove cafes from map")
+        self.assertEqual(r["intent"], "clear_poi")
+        self.assertEqual(r["category"], "cafe")
+
+    def test_it_dispatches_to_a_clear(self):
+        d = intent.for_voice("地図をクリアして")
+        self.assertEqual(d["tool"], "pi-poi")
+        self.assertEqual(d["args"], ["clear"])
+
+    def test_clearing_is_not_going_somewhere(self):
+        # It must not also move the map; A was chosen over B deliberately.
+        d = intent.for_voice("リセットして")
+        self.assertFalse(d.get("clear_pins"))
+        self.assertEqual(d["tool"], "pi-poi")
+
+    def test_a_place_called_reset_is_not_a_command(self):
+        r = intent.by_rule("show me the map of Reset")
+        self.assertEqual(r["intent"], "show_place")
+
+
 class PlaceHasNoCategoryTest(unittest.TestCase):
     """Moving the map somewhere is not a request to show anything.
 
