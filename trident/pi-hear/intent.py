@@ -41,6 +41,14 @@ try:
 except ImportError:                                # pragma: no cover
     _geo = None
 
+# Reading-based matching, for when the surface form did not survive. Optional
+# the same way geo is: it needs pykakasi, which the build host does not have,
+# and an exact match covers most sentences without it.
+try:
+    import romaji_match as _romaji
+except ImportError:                                # pragma: no cover
+    _romaji = None
+
 SLOTS = ("place", "category", "lang")
 
 # Not a slot the model fills: whether the request is about where the deck is,
@@ -336,6 +344,10 @@ _PLACE_OF = re.compile(
     re.I)
 _PLACE_JA = re.compile(r"([぀-ヿ一-鿿]+?)(?:の地図|を表示|に行|へ行)")
 
+# Kana or kanji anywhere in the sentence.
+_HAS_JA = re.compile(r"[぀-ヿ一-鿿]")
+
+
 def _find_category(text):
     if _geo is None:
         return None
@@ -344,6 +356,20 @@ def _find_category(text):
     for word in sorted(_geo.CATEGORIES, key=len, reverse=True):
         if word in low:
             return _geo.canonical_category(word)
+    # Then by reading. 駅 came back as 息, 域, 行き and 液 over five attempts,
+    # and every one of them reads いき or えき -- one edit from えき, or none.
+    # This is the same mechanism the wake word and the place names already use,
+    # and the reason it belongs here rather than in a table of misspellings:
+    # the surface form was never going to be guessable, but the sound was
+    # always right.
+    #
+    # Japanese only. Romanising English and comparing readings makes "show my
+    # location" a station search -- location against station is two edits of a
+    # seven-letter budget -- and English needs none of this: whisper writes
+    # "hotels" and "station" properly, and the exact match above catches them.
+    if _romaji is not None and _HAS_JA.search(text):
+        return _romaji.find_category(
+            text, {w: _geo.canonical_category(w) for w in _geo.CATEGORIES})
     return None
 
 

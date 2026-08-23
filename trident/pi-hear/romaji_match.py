@@ -152,6 +152,69 @@ def find_place(text):
     return best
 
 
+# Category words, matched by reading rather than by spelling -- the same trick
+# the wake word and the place names use, for the same reason.
+#
+# 駅 came back as 息, 域, 行き and 液 across five attempts. Every one of them
+# reads いき or えき: one edit from えき, or none. The surface form was never
+# going to be guessable, and a table of the four spellings would have been the
+# fifth thing patched by hand this week.
+#
+# Two edits of budget on a long reading (hakubutsukan) and one on a short one,
+# same shape as place_thresh. The floor matters more here than there, because
+# eki is three letters and three letters turn up inside anything.
+CATEGORY_THRESH = 0.34
+SHORT_CATEGORY_LEN = 6
+
+# ...and for the short ones the reading alone is not enough. Within one edit of
+# eki lie iki, oki and aki, and 「大きい」is ookii. So a short category has to be
+# followed by the particle that follows a category in these sentences: 駅を表示,
+# カフェを追加, 駅の場所. Anchored, the budget is exactly one edit over the whole
+# needle -- 1/5 for ekiwo, which admits ikiwo and refuses ikigo (意気込み, two)
+# and ikite (生きて, three). 「行きたい」has no particle after いき at all and so
+# never enters the comparison.
+CATEGORY_PARTICLES = ("wo", "no", "ga", "wa")
+
+
+def category_thresh(rom):
+    """One edit for a short reading, a proportion of a long one.
+
+    Long readings can afford proportional tolerance: hakubutsukan is eleven
+    letters and two edits of it is still nothing else. Short ones cannot, so
+    they get an absolute single edit over the anchored needle.
+    """
+    if len(rom) >= SHORT_CATEGORY_LEN:
+        return CATEGORY_THRESH
+    return 1.0 / len(rom)
+
+
+def find_category(text, categories):
+    """Best category reading in `text`, or None.
+
+    `categories` maps a spoken word to whatever the caller wants back, so this
+    module stays ignorant of what a category means -- geo owns that list.
+    """
+    rom = to_romaji(text)
+    if not rom:
+        return None
+    best = None
+    best_d = 1.0
+    for word, value in categories.items():
+        w = to_romaji(word)
+        if len(w) < 3:
+            continue                       # atm, bar: too short to risk
+        if len(w) >= SHORT_CATEGORY_LEN:
+            needles = (w,)
+        else:
+            needles = tuple(w + p for p in CATEGORY_PARTICLES)
+        for needle in needles:
+            d = best_window_dist(rom, needle)
+            thresh = category_thresh(needle)
+            if d <= thresh and d < best_d:
+                best_d, best = d, value
+    return best
+
+
 def reply_language(text):
     """Which language to answer in, decided from what came back.
 
