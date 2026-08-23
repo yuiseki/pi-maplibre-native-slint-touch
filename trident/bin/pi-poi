@@ -70,6 +70,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("category", help="cafe, restaurant, toilet, ... or 'clear'")
     ap.add_argument("where", nargs="*", help="a place name, or lat lon")
+    ap.add_argument("--here", action="store_true",
+                    help="around the deck itself, not where the map is looking")
     ap.add_argument("--radius", type=int, default=RADIUS, help="metres")
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--json", action="store_true")
@@ -96,6 +98,15 @@ def main():
         with open(FLYTO, "w") as fh:
             fh.write(place.flyto_line() + "\n")
     source = "given"
+    if lat is None and args.here:
+        # Skip the map's last flyTo: "cafes near me" means the ground under the
+        # deck, and the map may have been sent somewhere else entirely.
+        found = geo.where_now(flyto=None, gps=GPS, home=HOME)
+        if found is None:
+            print("pi-poi: no recent GPS fix and no PI_POI_HOME; cannot tell "
+                  "where 'here' is", file=sys.stderr)
+            return 1
+        lat, lon, source = found
     if lat is None:
         here = geo.where_now(flyto=FLYTO, gps=GPS, home=HOME)
         if here is None:

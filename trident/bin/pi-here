@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""pi-here: put the map on the deck's own position.
+
+    pi-here            fly there
+    pi-here --json     just say where it is
+
+Reads the fix pi-gps publishes. Says so plainly when there is none -- indoors
+there usually is not, and "the map did not move" is a worse answer than being
+told why.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.insert(0, "/home/yuiseki/src/pi-hear")
+import geo  # noqa: E402
+
+GPS = os.environ.get("PI_HERE_GPS", "/dev/shm/pi-gps-lastfix")
+FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
+NOMINATIM = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
+# Close enough to see the street, not so close the basemap runs out (z14).
+ZOOM = int(os.environ.get("PI_HERE_ZOOM", "14"))
+# A fix this old is a place the deck used to be. Half an hour is generous for
+# something carried around, and still short enough not to fly somewhere left
+# over from yesterday.
+MAX_AGE = int(os.environ.get("PI_HERE_MAX_AGE", "1800"))
+
+
+def read_fix(path=GPS, max_age=MAX_AGE):
+    """(lat, lon, age_seconds), or None."""
+    try:
+        with open(path) as fh:
+            parts = fh.read().split()
+        lat, lon, epoch = float(parts[0]), float(parts[1]), int(parts[2])
+    except (OSError, IndexError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    age = int(time.time()) - epoch
+    if max_age and age > max_age:
+        return None
+    return (lat, lon, age)
+
+
+def describe(lat, lon):
+    """The address, from the Nominatim on this machine. '' if it cannot say."""
+    url = NOMINATIM.rstrip("/") + "/reverse?" + urllib.parse.urlencode(
+        {"lat": lat, "lon": lon, "format": "jsonv2"})
+    try:
+        with urllib.request.urlopen(url, timeout=20) as r:
+            return json.load(r).get("display_name", "")
+    except Exception:                              # noqa: BLE001
+        return ""
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--zoom", type=int, default=ZOOM)
+    ap.add_argument("--no-fly", action="store_true")
+    args = ap.parse_args()
+
+    fix = read_fix()
+    if fix is None:
+        print("pi-here: no recent GPS fix -- the receiver needs a view of the "
+              "sky, and indoors it will not get one", file=sys.stderr)
+        return 1
+    lat, lon, age = fix
+    if not args.no_fly:
+        with open(FLYTO, "w") as fh:
+            fh.write("%.6f %.6f %d\n" % (lat, lon, args.zoom))
+    name = describe(lat, lon)
+    if args.json:
+        print(json.dumps({"lat": lat, "lon": lon, "age": age, "name": name},
+                         ensure_ascii=False))
+    else:
+        print("%.6f %.6f  (%ds ago)  %s" % (lat, lon, age, name))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

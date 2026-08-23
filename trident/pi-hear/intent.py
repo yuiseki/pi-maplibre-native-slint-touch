@@ -21,7 +21,8 @@ import subprocess
 
 # The whole vocabulary. Anything else the model invents is refused: acting on a
 # made-up intent is worse than admitting the sentence was not understood.
-INTENTS = ("show_place", "show_poi", "clear_poi", "set_language", "unknown")
+INTENTS = ("show_place", "show_poi", "clear_poi", "show_here",
+           "set_language", "unknown")
 
 # What the model is allowed to answer. set_language is deliberately not on the
 # list: switching languages is exactly the mistake a 0.5B model must not be
@@ -37,6 +38,10 @@ except ImportError:                                # pragma: no cover
 
 SLOTS = ("place", "category", "lang")
 
+# Not a slot the model fills: whether the request is about where the deck is,
+# rather than where the map is looking.
+FLAGS = ("here",)
+
 PROMPT_HEAD = """Convert a spoken map command into JSON.
 
 "intent" is one of:
@@ -47,6 +52,9 @@ PROMPT_HEAD = """Convert a spoken map command into JSON.
               "show me somewhere I can", "find me a" mean this.
   clear_poi   take those things off again. "remove", "clear", "get rid of",
               "hide" mean this.
+  show_here   move the map to where the device itself is. "where am I",
+              "show current location", "現在地" mean this. Unlike show_place
+              it names no place, because the place is wherever we are.
   unknown     anything that is not about the map.
 
 "place" is a place name copied from the command. Empty if none was named.
@@ -63,6 +71,8 @@ Examples:
   "I need a toilet"               {"intent":"show_poi","place":"","category":"toilet"}
   "remove cafes from map"         {"intent":"clear_poi","place":"","category":"cafe"}
   "get rid of everything"         {"intent":"clear_poi","place":"","category":""}
+  "where am I"                    {"intent":"show_here","place":"","category":""}
+  "show current location"         {"intent":"show_here","place":"","category":""}
   "what time is it"               {"intent":"unknown","place":"","category":""}
 
 Command:
@@ -98,6 +108,8 @@ def _empty(intent_name="unknown"):
     out = {"intent": intent_name}
     for slot in SLOTS:
         out[slot] = ""
+    for flag in FLAGS:
+        out[flag] = False
     return out
 
 
@@ -203,6 +215,20 @@ _LANG_JA_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ)")
 _LANG_NAMES = {"japanese": "ja", "nihongo": "ja", "日本語": "ja",
                "ニホンゴ": "ja", "english": "en", "英語": "en", "エイゴ": "en"}
 
+# "Here" is the deck's own position, as against wherever the map happens to be
+# looking. pi-poi prefers the map's last flyTo, which is right after "show me
+# Yokohama" and wrong when someone means the ground under their feet.
+_HERE_ONLY = re.compile(
+    r"\bwhere\s+am\s+i\b"
+    r"|\b(?:show|go\s+to|take\s+me\s+to)\s+(?:my|the\s+)?current\s+location\b"
+    r"|\b(?:show|go\s+to|take\s+me\s+to)\s+my\s+location\b"
+    r"|\btake\s+me\s+home\b"
+    r"|現在地|いまどこ|今どこ|ここはどこ", re.I)
+# ...and the same idea attached to a category: "cafes near me".
+_HERE_NEAR = re.compile(
+    r"\bnear\s*(?:me|here|by)\b|\baround\s+(?:me|here)\b"
+    r"|近く|この辺|周辺|近所", re.I)
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -263,6 +289,13 @@ def by_rule(transcript, lang=None):
             return out
 
     category = _find_category(text)
+    here = bool(_HERE_NEAR.search(text))
+
+    # "Where am I" on its own is a move, not a request to show things. Checked
+    # before the category rules so that a stray category word in the sentence
+    # cannot turn it into one.
+    if not category and _HERE_ONLY.search(text):
+        return _empty("show_here")
 
     # Order matters: "remove the cafes shown on the map" contains both verbs,
     # and the one that decides is the one asking for a change.
@@ -270,9 +303,12 @@ def by_rule(transcript, lang=None):
         out = _empty("clear_poi")
         out["category"] = category
         return out
-    if category and _SHOW.search(text):
+    if category and (_SHOW.search(text) or here):
+        # "cafes near me" has no verb at all; being anchored here is enough to
+        # say it is a request rather than a mention.
         out = _empty("show_poi")
         out["category"] = category
+        out["here"] = here
         return out
 
     m = _PLACE_OF.search(text)
@@ -464,8 +500,12 @@ def for_voice(transcript, lang=None):
         # the last place's pins are wrong.
         return {"tool": "pi-geocode", "args": ["--fly", result["place"]],
                 "timeout": 30, "intent": result, "clear_pins": True}
+    if name == "show_here":
+        return {"tool": "pi-here", "args": [], "timeout": 30,
+                "intent": result, "clear_pins": True}
     if name == "show_poi" and result["category"]:
-        return {"tool": "pi-poi", "args": [result["category"]],
+        args = (["--here"] if result.get("here") else []) + [result["category"]]
+        return {"tool": "pi-poi", "args": args,
                 "timeout": 120, "intent": result}
     if name == "clear_poi":
         return {"tool": "pi-poi", "args": ["clear"],
