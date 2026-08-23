@@ -296,6 +296,10 @@ def main():
         lang = romaji_match.reply_language(text)
         print(f"WAKE -> flyto {key} [{lang}]  '{text}'", flush=True)
         say_muted(romaji_match.confirmation(lang, spoken_ja, spoken_en))
+        # Same reason as in do_intent: pins are tied to a place, and this is a
+        # different place. The nine-city table goes through here, not there.
+        subprocess.run(["/usr/local/bin/pi-poi", "clear"],
+                       capture_output=True, timeout=20)
         subprocess.run(["/usr/local/bin/pi-flyto", key], timeout=10)
 
     def do_intent(text):
@@ -307,6 +311,11 @@ def main():
         what = plan["intent"]
         print(f"WAKE -> {plan['tool']} {plan['args']} [{lang}]  '{text}'",
               flush=True)
+        if plan.get("clear_pins"):
+            # Whatever is pinned belongs to where the map is now, not to where
+            # it is going.
+            subprocess.run(["/usr/local/bin/pi-poi", "clear"],
+                           capture_output=True, timeout=20)
         if what["intent"] == "show_place":
             say_muted("承知しました。" if lang == "ja" else "Understood.")
         try:

@@ -332,6 +332,38 @@ class ServerRequestTest(unittest.TestCase):
         self.assertEqual(r["category"], "cafe")
 
 
+class GoingSomewhereClearsThePinsTest(unittest.TestCase):
+    """Flying to a new place must not leave the last place's pins behind.
+
+    Observed on the deck: cafes shown in Hiroshima were still on screen after
+    the map moved, so "show Hiroshima" looked like it was adding cafes nobody
+    had asked for. It was not -- they were simply never taken off. Anywhere the
+    map goes next, pins from somewhere else are wrong.
+    """
+
+    def test_a_place_plan_says_to_clear_first(self):
+        real, intent.by_server = intent.by_server, (
+            lambda *a, **k: '{"intent":"show_place","place":"Kyoto","category":""}')
+        try:
+            d = intent.for_voice("take me to Kyoto")
+        finally:
+            intent.by_server = real
+        self.assertTrue(d.get("clear_pins"), d)
+
+    def test_the_rule_path_says_so_too(self):
+        d = intent.for_voice("show the map of city of hiroshima")
+        self.assertEqual(d["tool"], "pi-geocode")
+        self.assertTrue(d.get("clear_pins"), d)
+
+    def test_showing_pins_does_not_clear_them(self):
+        d = intent.for_voice("show cafes on map")
+        self.assertFalse(d.get("clear_pins"), d)
+
+    def test_clearing_does_not_ask_to_clear_twice(self):
+        d = intent.for_voice("remove cafes from map")
+        self.assertFalse(d.get("clear_pins"), d)
+
+
 class PlaceHasNoCategoryTest(unittest.TestCase):
     """Moving the map somewhere is not a request to show anything.
 

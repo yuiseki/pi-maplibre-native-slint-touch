@@ -380,8 +380,12 @@ def for_voice(transcript):
         return None
     name = result["intent"]
     if name == "show_place" and _is_a_name(result["place"]):
+        # Pins belong to the place they were found in. Cafes shown in Hiroshima
+        # stayed on screen when the map moved, which made "show Hiroshima" look
+        # like it was adding cafes nobody asked for. Wherever the map goes next,
+        # the last place's pins are wrong.
         return {"tool": "pi-geocode", "args": ["--fly", result["place"]],
-                "timeout": 30, "intent": result}
+                "timeout": 30, "intent": result, "clear_pins": True}
     if name == "show_poi" and result["category"]:
         return {"tool": "pi-poi", "args": [result["category"]],
                 "timeout": 120, "intent": result}

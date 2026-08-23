@@ -25,6 +25,9 @@ def act(result):
     """Carry out an intent with the tools that already exist."""
     name = result["intent"]
     if name == "show_place" and result["place"]:
+        # Pins from the place we are leaving do not belong on the one we are
+        # going to; see intent.for_voice.
+        subprocess.run(["pi-poi", "clear"], capture_output=True)
         return subprocess.run(["pi-geocode", "--fly", result["place"]]).returncode
     if name == "show_poi":
         if not result["category"]:
