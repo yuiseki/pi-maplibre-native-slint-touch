@@ -91,34 +91,6 @@ def ask_nominatim(query, base=NOMINATIM, timeout=20):
 
 
 
-def read_layers(path=None):
-    """What is currently on the map, {category: block of lines}.
-
-    Anything unreadable is treated as an empty map rather than an error: this
-    is a cache of what is on screen, and the worst case of getting it wrong is
-    drawing one search instead of two.
-    """
-    try:
-        with open(path or LAYERS) as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(doc, dict):
-        return {}
-    return {str(k): str(v) for k, v in doc.items() if v}
-
-
-def write_layers(layers, markers=None, path=None):
-    """Save the per-category blocks and rebuild the flat feed from them."""
-    with open(path or LAYERS, "w") as fh:
-        json.dump(layers, fh)
-    body = "\n".join(block.strip("\n") for block in layers.values()
-                      if block.strip())
-    with open(markers or MARKERS, "w") as fh:
-        fh.write(body + ("\n" if body else ""))
-    return body
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("category", help="cafe, restaurant, toilet, ... or 'clear'")
@@ -213,12 +185,12 @@ def main():
 
     # Replace this category, keep the others. Searching cafes twice should not
     # leave two overlapping sets of cafes, and should not remove the hotels.
-    layers = read_layers()
+    layers = geo.read_layers(LAYERS)
     if lines:
         layers[key] = lines
     else:
         layers.pop(key, None)
-    write_layers(layers)
+    geo.write_layers(layers, markers=MARKERS, path=LAYERS)
 
     # Fit the camera to what was just found, not to everything on the map: the
     # answer to the question just asked is what should be on screen. Both sets
@@ -244,11 +216,11 @@ def main():
                           "radius": args.radius, "count": n,
                           "from": source, "slot": geo.colour_slot(key),
                           "capped": bool(capped),
-                          "layers": sorted(read_layers())}))
+                          "layers": sorted(geo.read_layers(LAYERS))}))
     else:
         print("%d%s %s around %.4f %.4f (r=%dm, from %s%s) [on the map: %s]"
               % (n, capped, key, lat, lon, args.radius, source, fitted,
-                 ", ".join(sorted(read_layers())) or "nothing"))
+                 ", ".join(sorted(geo.read_layers(LAYERS))) or "nothing"))
     return 0
 
 

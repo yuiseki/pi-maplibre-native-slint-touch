@@ -582,6 +582,37 @@ def marker_lines(body, epoch, limit=200, slot=None):
     return "\n".join(out)
 
 
+# What is on the map, per category, so that adding one does not erase the last.
+# Kept beside marker_lines because it is the same feed seen from the other end:
+# marker_lines makes a block, this decides which blocks are showing. Both
+# pi-poi and pi-zoom write here, which is why it is not in either of them.
+def read_layers(path):
+    """{category: block of lines}, or {} for anything unreadable.
+
+    Unreadable is not an error: this is a cache of what is on screen, and the
+    worst case of getting it wrong is drawing one search instead of two.
+    """
+    try:
+        with open(path) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    return {str(k): str(v) for k, v in doc.items() if v}
+
+
+def write_layers(layers, markers, path):
+    """Save the per-layer blocks and rebuild the flat feed from them."""
+    with open(path, "w") as fh:
+        json.dump(layers, fh)
+    body = "\n".join(block.strip("\n") for block in layers.values()
+                      if block.strip())
+    with open(markers, "w") as fh:
+        fh.write(body + ("\n" if body else ""))
+    return body
+
+
 def bbox_of(lines):
     """The bounding box of a block of marker lines, or None if there are none.
 

@@ -22,7 +22,7 @@ import subprocess
 # The whole vocabulary. Anything else the model invents is refused: acting on a
 # made-up intent is worse than admitting the sentence was not understood.
 INTENTS = ("show_place", "show_poi", "clear_poi", "show_here",
-           "set_language", "disconnect_net", "unknown")
+           "zoom_to", "set_language", "disconnect_net", "unknown")
 
 # What the model is allowed to answer. set_language is deliberately not on the
 # list: switching languages is exactly the mistake a 0.5B model must not be
@@ -33,7 +33,8 @@ INTENTS = ("show_place", "show_poi", "clear_poi", "show_here",
 # air, and the person who has to notice that is standing in front of a screen
 # that looks fine. Both of these are rules-only, and deliberately so.
 MODEL_INTENTS = tuple(n for n in INTENTS
-                      if n not in ("set_language", "disconnect_net"))
+                      if n not in ("set_language", "disconnect_net",
+                                   "zoom_to"))
 
 # Category words are geo's business; asking it keeps one list, not two.
 try:
@@ -339,6 +340,20 @@ _POI_IN_EN = re.compile(
 # one a person means. Without excluding の from the run it captured 東京の新宿.
 _POI_NO_JA = re.compile(r"((?:(?!の)[぀-ヿ一-鿿A-Za-z0-9])+)の(?=[^の]*$)")
 
+# "Zoom to X" -- a named thing, not a category and not an administrative area.
+# 広島駅 and 広島国際会議場 are both in OSM and neither is in Nominatim here,
+# because this deck imported admin boundaries only. So they go to Overpass by
+# name, which is a different lookup from everything else and therefore its own
+# intent.
+#
+# It has to be read before the category rules: 広島駅 ends in 駅, and left to
+# them it becomes a search for every station near Hiroshima. The verb is what
+# says otherwise.
+_ZOOM_JA = re.compile(r"^\s*(.+?)\s*(?:に|へ|を)?\s*ズーム")
+_ZOOM_EN = re.compile(
+    r"\bzoom\s+(?:in\s+)?(?:to|on|into|at)\s+(?:the\s+)?(.+?)\s*[.!?]?\s*$",
+    re.I)
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -371,6 +386,26 @@ def _find_category(text):
         return _romaji.find_category(
             text, {w: _geo.canonical_category(w) for w in _geo.CATEGORIES})
     return None
+
+
+# What is left in front of ズーム when nothing was named: 「ズームして」,
+# 「もっとズーム」, "zoom in". Those are about the current view, which is a
+# different request and not one that exists yet.
+_ZOOM_BARE = re.compile(r"^(?:もっと|少し|ちょっと|in|out|も)?$", re.I)
+
+
+def is_zoom_request(text):
+    """True when the sentence names a thing to zoom to.
+
+    Exported for the voice loop, which checks the nine-city place table before
+    it gets here: that table finds 広島 inside 広島駅 and flies to the city,
+    which is the wrong half of the sentence.
+    """
+    m = _ZOOM_JA.search(str(text)) or _ZOOM_EN.search(str(text))
+    if not m:
+        return False
+    name = m.group(1).strip(" 　.,、。")
+    return bool(name) and not _ZOOM_BARE.match(name)
 
 
 def _poi_place(text, category):
@@ -455,6 +490,16 @@ def by_rule(transcript, lang=None):
     # nothing downstream should get the chance to read "net" as somewhere to go.
     if _NET_OFF.search(text) and not _NET_ON.search(text):
         return _empty("disconnect_net")
+
+    # Before the category rules, for the reason above.
+    m = _ZOOM_JA.search(text) or _ZOOM_EN.search(text)
+    if m:
+        name = m.group(1).strip(" 　.,、。")
+        # A bare "zoom in" names nothing and is not this.
+        if name and not _ZOOM_BARE.match(name):
+            out = _empty("zoom_to")
+            out["place"] = name
+            return out
 
     category = _find_category(text)
     here = bool(_HERE_NEAR.search(text))
@@ -692,6 +737,11 @@ def for_voice(transcript, lang=None):
         # the last place's pins are wrong.
         return {"tool": "pi-geocode", "args": ["--fly", result["place"]],
                 "timeout": 30, "intent": result, "clear_pins": True}
+    if name == "zoom_to" and _is_a_name(result["place"]):
+        # Overpass, not the geocoder: the thing being named is usually a
+        # building or a station, and neither is in this deck's Nominatim.
+        return {"tool": "pi-zoom", "args": [result["place"]],
+                "timeout": 90, "intent": result, "clear_pins": True}
     if name == "show_here":
         return {"tool": "pi-here", "args": [], "timeout": 30,
                 "intent": result, "clear_pins": True}

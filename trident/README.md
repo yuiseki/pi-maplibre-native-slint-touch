@@ -42,6 +42,7 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 | `bin/say-muted` | pi-say を half-duplex 化(再生中は pi-hear をミュートして自己集音回避) |
 | `bin/pi-flyto` | 地図IPC クライアント。`pi-flyto hiroshima` 等で `/dev/shm/pi-map-flyto` に書く |
 | `bin/pi-net` | Wi-Fi 状態表示 / 再接続 / 時限切断(`pi-net disconnect [秒]`。復帰を切断より先に予約する) |
+| `bin/pi-zoom` | 名前のあるものへ寄る(`pi-zoom 広島駅`)。Nominatim ではなく **Overpass** に名前で問い合わせる。このデッキの Nominatim は `IMPORT_STYLE=admin` なので駅も建物も入っておらず、広島駅は中国の广益街道、広島国際会議場は 0 件で返る。地図がいま見ている場所の近くから探すのは速度のためだけでなく**同定のため**で、広島に飛んだあとの「駅」は広島の駅を指す |
 | `bin/pi-offgrid` | 音声から届く時限オフライン。`pi-net disconnect` に 60 秒を渡し、復帰後に音声で報告する。音声で届くものは引数を一つに絞り範囲外を拒否する(10〜600秒)。`--stay` は**通さない**: 音声で無人機をネットから切り離せる経路はいずれ必ず事故る |
 | `bin/pi-kbd` | Bluetooth キーボード(CardKB2)を**Pi 内蔵の無線**で掴む。接続確立の数秒だけ Wi-Fi 送信電力を絞る(下記) |
 | `../hdmi/main_gl.cpp` | 地図アプリ(C++/Slint/femtovg-GL)。**flyTo IPC タイマー + render-pause** を追加済み |
@@ -57,6 +58,7 @@ pi4-d-hdmi 上で動く、**完全オフライン(off-grid)の音声操作地図
 | 自機の周りで検索 | 近くのカフェ | cafes near me | `pi-poi --here <category>` |
 | マーカーを消す | 地図をクリアして / リセットして | clear the map / reset | `pi-poi clear` |
 | 言語切替 | 言語モード 英語 | language mode Japanese | `pi-lang` |
+| 名前のあるものへ寄る | 広島駅にズームして | zoom to Hiroshima Station | `pi-zoom` |
 | オフライン実演 | インターネットを切断して | disconnect internet / go offline | `pi-offgrid 60` |
 
 ### POI の表示 — 色分けと fitbounds

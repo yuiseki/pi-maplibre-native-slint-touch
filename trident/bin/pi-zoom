@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""pi-zoom: put the map on a thing that has a name.
+
+    pi-zoom 広島駅
+    pi-zoom 広島国際会議場
+    pi-zoom "Hiroshima Station"
+
+This is the thing behind "広島駅にズームして". It is a different lookup from
+pi-geocode, and that is the whole reason it exists: this deck's Nominatim was
+imported with IMPORT_STYLE=admin, so it holds administrative areas and nothing
+else. 広島駅 comes back from it as 广益街道, a suburb in China, and
+広島国際会議場 comes back as nothing at all. Overpass has both.
+
+So: ask Overpass for a feature with that exact name, near where the map is
+already looking, widening once if that finds nothing. Near-first is not just
+speed -- it is the disambiguation. "駅にズーム" after flying to Hiroshima means
+the one in Hiroshima, and a planet-wide name search would have to guess.
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.append("/home/yuiseki/src/pi-hear")
+import geo  # noqa: E402
+
+OVERPASS = os.environ.get("PI_POI_OVERPASS", "http://127.0.0.1:8002")
+NOMINATIM = os.environ.get("PI_GEOCODE_URL", "http://127.0.0.1:8001")
+MARKERS = os.environ.get("PI_POI_MARKERS", "/dev/shm/pi-mesh-nodes")
+LAYERS = os.environ.get("PI_POI_LAYERS", "/dev/shm/pi-poi-layers.json")
+FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
+GPS = os.environ.get("PI_POI_GPS", "/dev/shm/pi-gps-lastfix")
+
+# Near first, then wide. 30km covers a city and its suburbs, which is what
+# "the station" means when you are looking at a city. 300km is the second
+# guess, and is already slow enough that a third would not be worth waiting
+# through -- past that, name the city too.
+RADII = (30000, 300000)
+
+# The layer these land in, so that "clear the map" takes them off with
+# everything else rather than leaving one orphan pin behind.
+LAYER = "zoom"
+
+
+def ask_overpass(query, timeout=60):
+    url = OVERPASS.rstrip("/") + "/api/interpreter"
+    data = urllib.parse.urlencode({"data": query}).encode()
+    with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def find_named(name, lat, lon, radius, timeout=60):
+    """Features with exactly this name within `radius` of lat/lon."""
+    # Quoted and escaped: the name came from a microphone, and Overpass QL is
+    # a language. A stray quote would otherwise be a syntax error at best.
+    safe = name.replace("\\", "\\\\").replace('"', '\\"')
+    q = ('[out:json][timeout:%d];nwr["name"="%s"](around:%d,%.6f,%.6f);'
+         'out center 20;' % (timeout, safe, radius, lat, lon))
+    try:
+        return ask_overpass(q, timeout=timeout + 10).get("elements", [])
+    except Exception as exc:                       # noqa: BLE001
+        print("pi-zoom: overpass: %s" % exc, file=sys.stderr)
+        return []
+
+
+def centre_of(el):
+    c = el.get("center") or el
+    lat, lon = c.get("lat"), c.get("lon")
+    return (float(lat), float(lon)) if lat is not None and lon is not None else None
+
+
+def pick(elements, lat, lon):
+    """One feature out of several, and the extent of the group.
+
+    A station is a node, a platform, a building and a relation all with the
+    same name; 広島駅 came back as five nodes inside 200m. They are one place,
+    so the answer is the group: centre on the closest, size the view to all of
+    them. A relation or way is preferred as the anchor because it has real
+    extent, where a node is somebody's guess at the middle.
+    """
+    pts = [(el, centre_of(el)) for el in elements]
+    pts = [(el, c) for el, c in pts if c]
+    if not pts:
+        return None
+    rank = {"relation": 0, "way": 1, "node": 2}
+
+    def key(item):
+        el, (elat, elon) = item
+        return (rank.get(el.get("type"), 3),
+                (elat - lat) ** 2 + (elon - lon) ** 2)
+
+    best_el, best_c = min(pts, key=key)
+    lats = [c[0] for _, c in pts]
+    lons = [c[1] for _, c in pts]
+    return best_el, best_c, (min(lats), max(lats), min(lons), max(lons))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("name", nargs="+", help="the name of the thing")
+    ap.add_argument("--near", nargs=2, type=float, metavar=("LAT", "LON"),
+                    help="search around here instead of where the map is")
+    ap.add_argument("--radius", type=int, default=0,
+                    help="metres; 0 tries %s in turn"
+                         % ", ".join(str(r) for r in RADII))
+    ap.add_argument("--no-pin", action="store_true",
+                    help="fly there without marking what was found")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+    name = " ".join(args.name).strip()
+    if not name:
+        print("pi-zoom: nothing named", file=sys.stderr)
+        return 2
+
+    if args.near:
+        lat, lon = args.near
+    else:
+        here = geo.where_now(flyto=FLYTO, gps=GPS, home="")
+        if here is None:
+            print("pi-zoom: the map has not been anywhere and there is no GPS "
+                  "fix, so there is no 'near' to search. Name a place first.",
+                  file=sys.stderr)
+            return 1
+        lat, lon = here[0], here[1]
+
+    found = None
+    for radius in ([args.radius] if args.radius else RADII):
+        elements = find_named(name, lat, lon, radius)
+        found = pick(elements, lat, lon)
+        if found:
+            used = radius
+            break
+
+    if not found:
+        print("pi-zoom: nothing called %r within %dkm"
+              % (name, RADII[-1] // 1000), file=sys.stderr)
+        return 1
+
+    el, (flat, flon), box = found
+    zoom = geo.fit_zoom(*box)
+    with open(FLYTO, "w") as fh:
+        fh.write("%.6f %.6f %d\n" % (flat, flon, zoom))
+
+    if not args.no_pin:
+        # One marker, in its own layer, so "clear the map" takes it too.
+        line = "poi%d-zoom %.6f %.6f %d %s" % (
+            geo.colour_slot(LAYER), flat, flon, int(time.time()),
+            name.replace(" ", "_"))
+        layers = geo.read_layers(LAYERS)
+        layers[LAYER] = line
+        geo.write_layers(layers, markers=MARKERS, path=LAYERS)
+
+    if args.json:
+        print(json.dumps({"name": name, "lat": flat, "lon": flon,
+                          "zoom": zoom, "type": el.get("type"),
+                          "id": el.get("id"), "matches": len(elements),
+                          "radius": used}))
+    else:
+        print("%s at %.5f %.5f (z%d, %s/%s, %d match%s within %dkm)"
+              % (name, flat, flon, zoom, el.get("type"), el.get("id"),
+                 len(elements), "" if len(elements) == 1 else "es",
+                 used // 1000))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

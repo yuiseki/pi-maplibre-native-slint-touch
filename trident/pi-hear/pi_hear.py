@@ -358,7 +358,13 @@ def main():
         # Romaji + edit-distance matching: collapses kanji/katakana/hiragana
         # mis-hearings (札幌/サッポロ, 沖縄/お気な, トライデント/トライ弦) by reading.
         matched, score, _r = romaji_match.wake_match(text)
-        place = romaji_match.find_place(text)
+        # The place table holds nine cities and matches them anywhere in the
+        # sentence, which is right for "show Hiroshima" and wrong for
+        # 「広島駅にズームして」-- it finds 広島 and flies to the city, discarding
+        # the half of the sentence that said which station. A sentence that
+        # names something to zoom to goes to the intent rules whole.
+        place = (None if intent_mod.is_zoom_request(text)
+                 else romaji_match.find_place(text))
         armed = time.time() < armed_until[0]
 
         if matched and place:                 # wake + place in one breath
