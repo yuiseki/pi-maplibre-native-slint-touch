@@ -82,6 +82,10 @@ export component MapWindow inherits Window {
     // using it: grey = nobody listening, green = pi-hear waiting for speech,
     // yellow = busy (transcribing, or muted while the map talks back).
     in property <bool> mic-present: false;
+    // Which language the recogniser is listening in: "" (unknown / pi-hear not
+    // running), "日" or "En". Next to the microphone because the two answer one
+    // question together -- whether it is listening, and to what.
+    in property <string> mic-lang: "";
     in property <int> mic-state: 0;   // 0=idle, 1=busy, 2=listening
     in property <image> mic-icon;     // set from C++ (grey/yellow/green PNG)
 
@@ -232,8 +236,20 @@ export component MapWindow inherits Window {
                     visible: root.mic-present;
                     source: root.mic-icon;
                 }
+                Text {                      // listening language, beside the mic
+                    x: 104px;
+                    y: 0px;
+                    width: 26px;
+                    height: 100%;
+                    visible: root.mic-present && root.mic-lang != "";
+                    text: root.mic-lang;
+                    color: #6ee06e;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                }
                 Image {                     // keyboard connected (green); hidden otherwise
-                    x: 108px;
+                    x: 136px;
                     y: 3px;
                     width: 20px;
                     height: 20px;

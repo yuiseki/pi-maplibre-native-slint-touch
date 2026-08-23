@@ -1243,6 +1243,12 @@ int main(int /*argc*/, char** /*argv*/) {
                 }
                 ss->voice_stage = stage;
                 win->set_voice_stage(stage);
+                // Short enough for the status bar, and legible in the language
+                // it names: someone listening in Japanese reads 日 faster than
+                // "JA". Empty when pi-hear is not running, so the strip shows
+                // nothing rather than a stale language.
+                win->set_mic_lang(slint::SharedString(
+                    lang.empty() ? "" : (lang == "en" ? "En" : "日")));
                 if (word != ss->cap_word || caption != ss->cap_text) {
                     ss->cap_word = word;
                     ss->cap_text = caption;
