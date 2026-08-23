@@ -1,0 +1,76 @@
+#!/bin/bash
+# pi-power: what the deck is actually drawing, and whether the battery is losing ground.
+#
+#   pi-power            one line
+#   pi-power -w [N]     a line every N seconds (default 60)
+#   pi-power -v         one line plus the per-rail breakdown
+#
+# The X120X reports status=Charging whenever its power-loss GPIO says input is
+# present, so it says Charging even while the pack is being drained. Trust the
+# sign of power_now instead: it is what tells you the supply is short.
+#
+# rails= is the Pi 5 PMIC total. It covers the SoC only, not the USB ports or
+# anything hanging off them, so it always reads lower than the wall draw.
+
+set -u
+BATT=/sys/class/power_supply/x120x-battery
+ADC=/tmp/pi-power.adc
+
+die() { echo "pi-power: $*" >&2; exit 1; }
+[ -d "$BATT" ] || die "no X120X battery at $BATT (is the x120x module loaded?)"
+command -v vcgencmd >/dev/null || die "vcgencmd not found"
+
+rails() {
+    awk '/current\(/ {n=$1; sub(/_A$/,"",n); split($2,a,"="); c[n]=a[2]+0}
+         /volt\(/    {n=$1; sub(/_V$/,"",n); split($2,a,"="); v[n]=a[2]+0}
+         END {t=0; for (k in c) t += c[k]*v[k]; printf "%.2f", t}' "$ADC"
+}
+
+breakdown() {
+    awk '/current\(/ {n=$1; sub(/_A$/,"",n); split($2,a,"="); c[n]=a[2]+0}
+         /volt\(/    {n=$1; sub(/_V$/,"",n); split($2,a,"="); v[n]=a[2]+0}
+         END {for (k in c) if (v[k] > 0) printf "    %-11s %6.3f A x %6.3f V = %6.3f W\n", k, c[k], v[k], c[k]*v[k]}' \
+        "$ADC" | sort -t= -k2 -nr
+}
+
+sample() {
+    local cap volt pwr ac st ext rail flow left
+    cap=$(cat "$BATT/capacity")
+    volt=$(cat "$BATT/voltage_now")
+    pwr=$(cat "$BATT/power_now")
+    ac=$(cat /sys/class/power_supply/x120x-ac/online)
+    st=$(cat /sys/class/power_supply/x120x-charger/status)
+    vcgencmd pmic_read_adc > "$ADC"
+    ext=$(sed -n 's/.*EXT5V_V volt(24)=\([0-9.]*\)V/\1/p' "$ADC")
+    rail=$(rails)
+
+    # The sign of power_now is the real state; the charger's own status is not.
+    if [ "$pwr" -gt 100000 ]; then flow=charging
+    elif [ "$pwr" -lt -100000 ]; then flow=DRAINING
+    else flow=float
+    fi
+
+    # Rough time left, from the energy counters the gauge keeps.
+    left=$(awk -v e="$(cat "$BATT/energy_now")" -v p="$pwr" \
+        'BEGIN {if (p < -100000) printf "%dmin left", e / -p * 60; else printf "-"}')
+
+    printf '%s ac=%s %-8s batt=%3s%% %.3fV %+6.2fW %-10s ext5v=%.3fV rails=%sW %s %s\n' \
+        "$(date '+%F %T')" "$ac" "$flow" "$cap" \
+        "$(awk -v x="$volt" 'BEGIN{print x/1e6}')" \
+        "$(awk -v x="$pwr"  'BEGIN{print x/1e6}')" \
+        "$left" "$ext" "$rail" \
+        "$(vcgencmd measure_temp)" "$(vcgencmd get_throttled)"
+
+    # status disagreeing with the current is the signature of a supply that is
+    # present but too weak, so say it out loud rather than leaving it in the log.
+    if [ "$flow" = DRAINING ] && [ "$ac" = 1 ]; then
+        echo "    input present but the pack is covering the shortfall: the supply is too weak"
+    fi
+}
+
+case "${1:-}" in
+    -w) while :; do sample; sleep "${2:-60}"; done ;;
+    -v) sample; breakdown ;;
+    "") sample ;;
+    *)  die "usage: pi-power [-w seconds | -v]" ;;
+esac
