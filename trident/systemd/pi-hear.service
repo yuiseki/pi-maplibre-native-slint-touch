@@ -16,6 +16,11 @@ Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8
 # to an English-speaking audience is a line in this file and a restart. The
 # leading "-" means the file is optional.
 EnvironmentFile=-/etc/default/pi-hear
+# The language is in its own file because pi-lang writes it, including from a
+# voice command. Listed second so it wins: a spoken switch should outrank what
+# was configured by hand, and the hand-written file is where everything that is
+# *not* reachable by voice lives.
+EnvironmentFile=-/etc/default/pi-hear-lang
 # Mic referenced by CARD name (not index) so a reboot's USB enumeration order
 # can't break it. Empty --whisper-prompt = no initial-prompt biasing (intentional).
 ExecStart=/home/yuiseki/.venv-ahear/bin/python /home/yuiseki/src/pi-hear/pi_hear.py \

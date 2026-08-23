@@ -232,10 +232,21 @@ class RealTranscriptTest(unittest.TestCase):
 
 
 class PromptTest(unittest.TestCase):
-    def test_the_prompt_names_every_allowed_intent(self):
+    def test_the_prompt_names_every_intent_the_model_may_answer(self):
         p = intent.build_prompt("show cafes")
-        for name in intent.INTENTS:
+        for name in intent.MODEL_INTENTS:
             self.assertIn(name, p)
+
+    def test_the_model_is_not_offered_the_language_switch(self):
+        # Switching languages is the one mistake a 0.5B model must not be able
+        # to make: get it wrong and the deck stops understanding the person
+        # telling it to switch back. The phrasings are fixed; rules catch them.
+        self.assertNotIn("set_language", intent.build_prompt("show cafes"))
+        self.assertNotIn("set_language", intent.grammar())
+
+    def test_the_rules_still_catch_it(self):
+        self.assertEqual(intent.by_rule("language mode Japanese")["intent"],
+                         "set_language")
 
     def test_the_transcript_is_in_the_prompt(self):
         self.assertIn("show cafes in Kyoto",
@@ -260,9 +271,9 @@ class GrammarTest(unittest.TestCase):
     load-bearing any more.
     """
 
-    def test_every_intent_is_offered(self):
+    def test_every_intent_the_model_may_answer_is_offered(self):
         g = intent.grammar()
-        for name in intent.INTENTS:
+        for name in intent.MODEL_INTENTS:
             self.assertIn(name, g)
 
     def test_no_intent_outside_the_list_can_be_expressed(self):

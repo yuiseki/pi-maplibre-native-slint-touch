@@ -311,6 +311,12 @@ def main():
         what = plan["intent"]
         print(f"WAKE -> {plan['tool']} {plan['args']} [{lang}]  '{text}'",
               flush=True)
+        if plan.get("speak_first"):
+            # The tool about to run restarts this process, so anything said
+            # afterwards is never said. Speak now, and in the language being
+            # switched to -- the last thing heard should match what the deck is
+            # about to expect.
+            say_muted(plan["say"])
         if plan.get("clear_pins"):
             # Whatever is pinned belongs to where the map is now, not to where
             # it is going.

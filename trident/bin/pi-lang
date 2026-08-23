@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# pi-lang: change the language pi-hear listens in.
+#
+#   pi-lang          show the current one
+#   pi-lang ja       listen in Japanese
+#   pi-lang en       listen in English
+#
+# The recogniser is told the language rather than detecting it, so switching is
+# a restart rather than a setting that takes effect mid-sentence. See
+# /etc/default/pi-hear for why being told beats detecting.
+#
+# The language lives in its own file, apart from the rest of pi-hear's
+# configuration, for one reason: this is reachable by voice. A misheard
+# sentence can write this file and nothing else, and the file can hold nothing
+# but a language. Everything else about how pi-hear runs stays where only root
+# can change it.
+set -u
+
+FILE="${PI_LANG_FILE:-/etc/default/pi-hear-lang}"
+SYSTEMCTL="${PI_LANG_SYSTEMCTL:-systemctl}"
+SUDO=""
+[ "$(id -u)" != "0" ] && SUDO="sudo -n"
+SUDO="${PI_LANG_SUDO-$SUDO}"
+
+current() {
+    [ -r "$FILE" ] || return 0
+    sed -n 's/^PI_HEAR_LANG=//p' "$FILE" | tail -1
+}
+
+want="${1:-}"
+if [ -z "$want" ]; then
+    printf '%s\n' "$(current)"
+    exit 0
+fi
+
+# Two languages, and only these. 'auto' costs about 2.6x the latency and has
+# misidentified accented English as Chinese; it is not somewhere to end up by
+# accident from a misheard sentence. Anything else is refused rather than
+# written, because what is written here is handed to whisper.
+case "$want" in
+    ja|en) ;;
+    *) echo "pi-lang: not a language I listen in: '$want' (ja|en)" >&2; exit 2;;
+esac
+
+if [ "$want" = "$(current)" ]; then
+    echo "already listening in $want"
+    exit 0
+fi
+
+# Keep whatever a person wrote in the file; replace only the assignment. A
+# hand-written note about why the deck is in English for a demo should survive
+# being switched back.
+tmp="$(mktemp)"
+if [ -r "$FILE" ]; then
+    grep -v '^PI_HEAR_LANG=' "$FILE" > "$tmp"
+else
+    printf '%s\n' \
+      '# Which language pi-hear listens in. Written by pi-lang, including from' \
+      '# a voice command, so it holds this and nothing else.' > "$tmp"
+fi
+printf 'PI_HEAR_LANG=%s\n' "$want" >> "$tmp"
+
+if [ -w "$FILE" ] || { [ ! -e "$FILE" ] && [ -w "$(dirname "$FILE")" ]; }; then
+    cat "$tmp" > "$FILE"
+else
+    $SUDO cp "$tmp" "$FILE" && $SUDO chmod 644 "$FILE"
+fi
+rm -f "$tmp"
+
+echo "listening in $want"
+# Restarting kills whoever asked, if that was the voice loop. The caller speaks
+# before calling this; see intent.for_voice's speak_first.
+$SUDO $SYSTEMCTL restart pi-hear

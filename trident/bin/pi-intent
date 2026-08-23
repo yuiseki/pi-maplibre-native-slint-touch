@@ -42,6 +42,8 @@ def act(result):
         return subprocess.run(cmd).returncode
     if name == "clear_poi":
         return subprocess.run(["pi-poi", "clear"]).returncode
+    if name == "set_language" and result["lang"]:
+        return subprocess.run(["pi-lang", result["lang"]]).returncode
     print("pi-intent: nothing to do for %s" % name, file=sys.stderr)
     return 1
 

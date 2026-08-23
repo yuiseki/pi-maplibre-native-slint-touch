@@ -21,7 +21,13 @@ import subprocess
 
 # The whole vocabulary. Anything else the model invents is refused: acting on a
 # made-up intent is worse than admitting the sentence was not understood.
-INTENTS = ("show_place", "show_poi", "clear_poi", "unknown")
+INTENTS = ("show_place", "show_poi", "clear_poi", "set_language", "unknown")
+
+# What the model is allowed to answer. set_language is deliberately not on the
+# list: switching languages is exactly the mistake a 0.5B model must not be
+# able to make, because the deck then stops understanding the person telling it
+# to switch back. The phrasings are fixed and the rules catch them outright.
+MODEL_INTENTS = tuple(n for n in INTENTS if n != "set_language")
 
 # Category words are geo's business; asking it keeps one list, not two.
 try:
@@ -29,7 +35,7 @@ try:
 except ImportError:                                # pragma: no cover
     _geo = None
 
-SLOTS = ("place", "category")
+SLOTS = ("place", "category", "lang")
 
 PROMPT_HEAD = """Convert a spoken map command into JSON.
 
@@ -76,6 +82,16 @@ def build_prompt(transcript):
     """
     one_line = " ".join(str(transcript).split())
     return PROMPT_HEAD + json.dumps(one_line, ensure_ascii=False) + PROMPT_TAIL
+
+
+# What the deck says as it switches -- in the language it is switching *to*,
+# not the one being left. The last thing heard should match what it is about to
+# expect, or the person answers in the wrong language.
+_LANG_REPLY = {"ja": "日本語モードにします。", "en": "Switching to English."}
+
+
+def reply_for_language(lang):
+    return _LANG_REPLY.get(lang, _LANG_REPLY["ja"])
 
 
 def _empty(intent_name="unknown"):
@@ -163,6 +179,21 @@ _CLEAR = re.compile(
 _SHOW = re.compile(
     r"\b(show|add|display|put|find|need|want|looking for|where is|where are"
     r"|where can i)\b|表示|出して|見せて|追加|ある\?|どこ", re.I)
+# The language being switched is the one the recogniser is using, so a request
+# can only be understood in the language currently in force: "Japanese mode"
+# said in Japanese while listening in English comes back as noise. Each phrasing
+# therefore belongs to the language doing the asking.
+#
+# "mode" or a switching verb is required. "show me the map of English Bay" is a
+# place in Vancouver, and "what languages do you speak" is conversation.
+_LANG_EN = re.compile(
+    r"\b(?:language\s*mode|switch(?:\s+to)?|change\s+to|speak)\s+"
+    r"(japanese|english|nihongo)\b", re.I)
+_LANG_JA = re.compile(
+    r"(?:言語モード|言語)\s*(英語|日本語)|(英語|日本語)モード")
+_LANG_NAMES = {"japanese": "ja", "nihongo": "ja", "日本語": "ja",
+               "english": "en", "英語": "en"}
+
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
     re.I)
@@ -184,6 +215,18 @@ def by_rule(transcript):
     text = " ".join(str(transcript).split())
     if not text:
         return None
+
+    # Before the category rules: "speak English" contains no category, but
+    # nothing else should get the chance to read a language name as a place.
+    m = _LANG_EN.search(text) or _LANG_JA.search(text)
+    if m:
+        word = next((g for g in m.groups() if g), "").lower()
+        lang = _LANG_NAMES.get(word)
+        if lang:
+            out = _empty("set_language")
+            out["lang"] = lang
+            return out
+
     category = _find_category(text)
 
     # Order matters: "remove the cafes shown on the map" contains both verbs,
@@ -330,7 +373,7 @@ def grammar():
     Requiring all three fields rather than making them optional is the same
     lesson: an optional field is an invitation to skip the hard part.
     """
-    intents = " | ".join('"\\"%s\\""' % n for n in INTENTS)
+    intents = " | ".join('"\\"%s\\""' % n for n in MODEL_INTENTS)
     return (
         'root ::= "{" ws "\\"intent\\"" ws ":" ws intent "," '
         'ws "\\"place\\"" ws ":" ws string "," '
@@ -392,6 +435,13 @@ def for_voice(transcript):
     if name == "clear_poi":
         return {"tool": "pi-poi", "args": ["clear"],
                 "timeout": 20, "intent": result}
+    if name == "set_language" and result["lang"]:
+        # speak_first because taking the new language means restarting pi-hear,
+        # which kills the process that would otherwise have spoken afterwards.
+        # Silence here reads as a crash.
+        return {"tool": "pi-lang", "args": [result["lang"]],
+                "timeout": 30, "intent": result, "speak_first": True,
+                "say": reply_for_language(result["lang"])}
     return None
 
 
