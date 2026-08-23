@@ -80,6 +80,37 @@ def find_place(text):
     return best
 
 
+def make_alsa_reader(proc, audio_q, stop, blocksize, on_death=None):
+    """Feed audio_q from arecord's stdout, and say so when the stream ends.
+
+    Plugging in a USB audio adapter re-enumerates the bus, and arecord loses
+    its stream: "pcm_read: read error: No such device". This loop used to break
+    and the thread simply ended -- nothing else noticed. pi-hear stayed up,
+    systemd reported active, Restart=always never fired, and the deck listened
+    to silence for half an hour until the greyed-out microphone icon on the map
+    gave it away.
+
+    Reporting healthy while deaf is the worst failure available here, so the
+    end of the stream is reported. `stop` being set is not a death: shutting
+    down is not the microphone failing, and treating it as one would put a
+    fault in the journal on every clean exit.
+    """
+    nbytes = blocksize * 2                          # int16 mono
+
+    def reader():
+        while not stop.is_set():
+            buf = proc.stdout.read(nbytes)
+            if not buf or len(buf) < nbytes:
+                if not stop.is_set() and on_death is not None:
+                    on_death("capture ended: read %d of %d bytes (rc=%s)"
+                             % (len(buf) if buf else 0, nbytes, proc.poll()))
+                return
+            audio_q.put(
+                np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0)
+
+    return reader
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="pi-hear: Japanese speech → text (VAD-segmented, pluggable ASR)"
@@ -399,16 +430,20 @@ def main():
              "-r", str(sr), "-c", "1", "-t", "raw"],
             stdout=subprocess.PIPE)
 
-        def alsa_reader():
-            nbytes = args.blocksize * 2  # int16 mono
-            while not stop.is_set():
-                buf = arec.stdout.read(nbytes)
-                if not buf or len(buf) < nbytes:
-                    break
-                audio_q.put(
-                    np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0)
+        def capture_died(why):
+            # Exit rather than try to recover in place: the unit already has
+            # Restart=always and RestartSec=2, and re-opening a device that has
+            # just been re-enumerated is the sort of thing that half-works.
+            # Dying honestly is the whole fix.
+            print(f"pi-hear: {why}; exiting for systemd to restart",
+                  file=sys.stderr, flush=True)
+            publish_state("down", "", hold=0.0, override=True)
+            os._exit(1)
 
-        threading.Thread(target=alsa_reader, daemon=True).start()
+        threading.Thread(
+            target=make_alsa_reader(arec, audio_q, stop, args.blocksize,
+                                    on_death=capture_died),
+            daemon=True).start()
         stream_ctx = contextlib.nullcontext()
         print(f"pi-hear: listening (engine={args.engine}, arecord "
               f"{args.alsa_device}, lang={args.language}, thr={args.threshold}); "
