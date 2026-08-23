@@ -189,10 +189,19 @@ _SHOW = re.compile(
 _LANG_EN = re.compile(
     r"\b(?:language\s*mode|switch(?:\s+to)?|change\s+to|speak)\s+"
     r"(japanese|english|nihongo)\b", re.I)
+# The phrase alone, with the language name lost. See _other_language.
+_LANG_EN_BARE = re.compile(r"\blanguage\s*mode\b", re.I)
+# whisper-base does not write 言語モード in kanji. Real transcripts of the same
+# spoken phrase: ゲンゴモード, げんごモード, 言語モード. The language names come
+# back both ways too (英語 / エイゴ). Written against the kanji a person types,
+# this matched none of them.
 _LANG_JA = re.compile(
-    r"(?:言語モード|言語)\s*(英語|日本語)|(英語|日本語)モード")
+    r"(?:言語|げんご|ゲンゴ)\s*モード"          # the phrase, however it is written
+    r"|(英語|エイゴ|日本語|ニホンゴ)\s*モード")   # ...or just "<language> mode"
+_LANG_JA_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ)")
+
 _LANG_NAMES = {"japanese": "ja", "nihongo": "ja", "日本語": "ja",
-               "english": "en", "英語": "en"}
+               "ニホンゴ": "ja", "english": "en", "英語": "en", "エイゴ": "en"}
 
 _PLACE_OF = re.compile(
     r"\bmap of (?:the )?(?:city of |town of )?([a-zÀ-ɏ\s'-]+)",
@@ -210,21 +219,47 @@ def _find_category(text):
     return None
 
 
-def by_rule(transcript):
-    """Answer the common sentences without waking the model. None if unsure."""
+def _other_language(lang):
+    """The one that is not in use, or None if we do not know which is.
+
+    The language name is the fragile part of the sentence: 「英語」came back as
+    「絵を」and「行こう」. The structure survives that. Asking to switch while
+    listening in Japanese can only mean English -- nobody asks for the language
+    they are already being understood in -- so the phrase alone is enough,
+    provided we know which one that is. Called from the voice loop, which does;
+    from a shell, which does not, this declines rather than guessing.
+    """
+    return {"ja": "en", "en": "ja"}.get(lang)
+
+
+def by_rule(transcript, lang=None):
+    """Answer the common sentences without waking the model. None if unsure.
+
+    `lang` is the language currently being listened in, when the caller knows.
+    """
     text = " ".join(str(transcript).split())
     if not text:
         return None
 
     # Before the category rules: "speak English" contains no category, but
     # nothing else should get the chance to read a language name as a place.
-    m = _LANG_EN.search(text) or _LANG_JA.search(text)
+    m = _LANG_EN.search(text)
     if m:
-        word = next((g for g in m.groups() if g), "").lower()
-        lang = _LANG_NAMES.get(word)
+        lang = _LANG_NAMES.get(m.group(1).lower())
         if lang:
             out = _empty("set_language")
             out["lang"] = lang
+            return out
+    if _LANG_JA.search(text) or _LANG_EN_BARE.search(text):
+        # The phrase and the language name arrive as separate fragments often
+        # enough (ゲンゴモード + 英語) that they are matched separately. A
+        # readable name wins; without one, fall back to "the other language",
+        # which is the only thing the request can mean.
+        n = _LANG_JA_NAME.search(text)
+        want = _LANG_NAMES.get(n.group(1)) if n else _other_language(lang)
+        if want:
+            out = _empty("set_language")
+            out["lang"] = want
             return out
 
     category = _find_category(text)
@@ -406,7 +441,7 @@ def _is_a_name(place):
     return bool(place) and bool(_NAME_RE.search(place))
 
 
-def for_voice(transcript):
+def for_voice(transcript, lang=None):
     """What the voice loop should run, or None to stay silent.
 
     Rules first -- the phrases people actually use should not pay for a round
@@ -415,7 +450,7 @@ def for_voice(transcript):
     be rules-only. A sentence neither can read is left alone: guessing moves
     someone's map for them.
     """
-    result = by_rule(transcript)
+    result = by_rule(transcript, lang=lang)
     if result is None:
         answer = by_server(transcript, timeout=VOICE_TIMEOUT)
         result = parse(answer) if answer else None

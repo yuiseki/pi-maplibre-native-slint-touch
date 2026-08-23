@@ -304,7 +304,9 @@ def main():
 
     def do_intent(text):
         """Handle what the place table could not. True if something was done."""
-        plan = intent_mod.for_voice(text)
+        # The current language is what makes「ゲンゴモード」without a readable
+        # language name interpretable; see intent._other_language.
+        plan = intent_mod.for_voice(text, lang=args.language)
         if plan is None:
             return False
         lang = romaji_match.reply_language(text)

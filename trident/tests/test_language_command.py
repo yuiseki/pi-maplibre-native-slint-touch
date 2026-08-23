@@ -50,6 +50,68 @@ class RecognisedTest(unittest.TestCase):
         self.assertIsNone(intent.by_rule("what languages do you speak"))
 
 
+class RealJapaneseTranscriptTest(unittest.TestCase):
+    """Verbatim from the deck. whisper-base does not write 言語モード in kanji.
+
+    Every one of these was an attempt at「言語モード 英語」and every one failed,
+    because the rule was written in the kanji a person types rather than in
+    what comes back from the recogniser. The same mistake as the English rules
+    a day earlier, in a different alphabet.
+    """
+
+    HEARD = [
+        ("げんごモード 英語", "en"),
+        ("言語モード 英語", "en"),
+        ("ゲンゴモード エイゴ", "en"),
+        ("言語モード 日本語", "ja"),
+        ("ゲンゴモード ニホンゴ", "ja"),
+    ]
+
+    def test_what_was_actually_heard(self):
+        for text, want in self.HEARD:
+            r = intent.by_rule(text)
+            self.assertIsNotNone(r, "%r matched nothing" % text)
+            self.assertEqual(r["intent"], "set_language", text)
+            self.assertEqual(r["lang"], want, text)
+
+    def test_the_language_name_can_be_lost_and_still_be_understood(self):
+        """「英語」came back as「絵を」and「行こう」-- the name is the fragile part.
+
+        The structure survives it. Asking to switch while listening in Japanese
+        can only mean English: nobody asks for the language already in use.
+        Given the phrase and no readable name, go to the other one.
+        """
+        for text in ("ゲンゴモードを絵を", "ゲンゴモードへ行こう", "言語モード"):
+            r = intent.by_rule(text, lang="ja")
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "set_language", text)
+            self.assertEqual(r["lang"], "en", text)
+
+    def test_the_same_inference_the_other_way_round(self):
+        r = intent.by_rule("language mode", lang="en")
+        self.assertEqual(r["lang"], "ja")
+
+    def test_a_readable_name_still_wins_over_the_inference(self):
+        # Asking for the language already in use is harmless and understood;
+        # the inference must not override what was actually said.
+        r = intent.by_rule("言語モード 日本語", lang="ja")
+        self.assertEqual(r["lang"], "ja")
+
+    def test_without_knowing_the_current_language_it_stays_cautious(self):
+        # by_rule is also called from pi-intent, which has no session language.
+        self.assertIsNone(intent.by_rule("ゲンゴモードを絵を"))
+
+    def test_a_transcript_too_mangled_to_read_is_left_alone(self):
+        # 「銀行もど、英語」was also 言語モード 英語, but a rule that reads 銀行
+        # as 言語 will read other things wrongly too. This is the model's to
+        # attempt, or nobody's.
+        self.assertIsNone(intent.by_rule("銀行もど、英語"))
+
+    def test_a_place_that_merely_mentions_a_language_is_still_a_place(self):
+        r = intent.by_rule("英語村を表示して")
+        self.assertEqual(r["intent"], "show_place")
+
+
 class DispatchTest(unittest.TestCase):
     def test_it_becomes_a_pi_lang_call(self):
         d = intent.for_voice("language mode Japanese")
