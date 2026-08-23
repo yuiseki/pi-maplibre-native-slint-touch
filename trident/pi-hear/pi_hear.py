@@ -277,7 +277,7 @@ def main():
         print(f"WAKE -> {plan['tool']} {plan['args']} [{lang}]  '{text}'",
               flush=True)
         if what["intent"] == "show_place":
-            say_muted("承知しました。" if lang == "ja" else "OK.")
+            say_muted("承知しました。" if lang == "ja" else "Understood.")
         try:
             subprocess.run(["/usr/local/bin/" + plan["tool"]] + plan["args"],
                            timeout=plan["timeout"])
