@@ -192,9 +192,22 @@ def main():
     ap.add_argument("--act", action="store_true",
                     help="on a wake-matched utterance, resolve a place name, "
                          "confirm via pi-say, and fly the map via pi-flyto")
-    ap.add_argument("--say-device", default="plughw:0,0",
-                    help="ALSA device pi-say uses for confirmations (default "
-                         "3.5mm; use 'btspk' for the Bluetooth headset)")
+    # Empty by default, and empty means "do not pass --device at all".
+    #
+    # pi-say already knows which speaker this machine has: /etc/default/pi-say
+    # holds PI_SAY_DEVICE because, as its own docstring puts it, what the
+    # speaker needs is a property of the speaker rather than of every caller.
+    # Defaulting this to plughw:0,0 overrode that from here, and on a deck whose
+    # 3.5mm jack is card 0 = HDMI the confirmations went to a socket with
+    # nothing plugged into it: the map flew to Okinawa in silence while
+    # `pi-say "..."` typed by hand was perfectly audible.
+    #
+    # Pass a device here only to override the machine's own setting -- a
+    # Bluetooth headset for one session, say.
+    ap.add_argument("--say-device", default="",
+                    help="ALSA device for confirmations. Empty (the default) "
+                         "leaves the choice to pi-say and /etc/default/pi-say, "
+                         "which is where this machine's speaker is described")
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute",
                     help="while this file exists, drop all audio (half-duplex: "
                          "pi-say creates it during playback so we don't self-hear)")
@@ -257,8 +270,10 @@ def main():
         try:
             open(args.mute_file, "w").close()
             publish_state("speaking", text, hold=25.0, override=True)
-            subprocess.run(["/usr/local/bin/pi-say", "--device", args.say_device,
-                            text], timeout=20)
+            cmd = ["/usr/local/bin/pi-say"]
+            if args.say_device:
+                cmd += ["--device", args.say_device]
+            subprocess.run(cmd + [text], timeout=20)
         except Exception as e:
             print(f"[act] pi-say error: {e}", file=sys.stderr)
         finally:
