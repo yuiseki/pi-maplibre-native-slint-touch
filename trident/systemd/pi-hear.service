@@ -12,6 +12,12 @@ WorkingDirectory=/home/yuiseki/src/pi-hear
 # pi-say / pi-flyto are called by absolute path already.
 Environment=PATH=/home/yuiseki/src/whisper.cpp/build/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8
+# Which mic to listen to. Referenced by CARD name (not index) so a reboot's
+# USB enumeration order can't break it. Overridden per host in
+# /etc/default/pi-hear: the deck has four USB ports, so which mic is attached
+# is a daily decision, and pointing at an absent one is not a quiet fallback
+# but a restart loop -- arecord exits, pi-hear exits with it, forever.
+Environment=PI_HEAR_DEVICE=plughw:CARD=Device,DEV=0
 # Which language to listen in (PI_HEAR_LANG). Everyday use is Japanese; a demo
 # to an English-speaking audience is a line in this file and a restart. The
 # leading "-" means the file is optional.
@@ -21,13 +27,12 @@ EnvironmentFile=-/etc/default/pi-hear
 # was configured by hand, and the hand-written file is where everything that is
 # *not* reachable by voice lives.
 EnvironmentFile=-/etc/default/pi-hear-lang
-# Mic referenced by CARD name (not index) so a reboot's USB enumeration order
-# can't break it. Empty --whisper-prompt = no initial-prompt biasing (intentional).
+# Empty --whisper-prompt = no initial-prompt biasing (intentional).
 ExecStart=/home/yuiseki/.venv-ahear/bin/python /home/yuiseki/src/pi-hear/pi_hear.py \
   --engine whisper \
   --whisper-model /home/yuiseki/src/whisper.cpp/models/ggml-base.bin \
   --whisper-prompt "" \
-  --alsa-device plughw:CARD=Device,DEV=0 \
+  --alsa-device ${PI_HEAR_DEVICE} \
   --samplerate 16000 \
   --threshold 0.08 \
   --min-speech 0.5 \
