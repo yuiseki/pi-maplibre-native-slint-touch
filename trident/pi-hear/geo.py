@@ -14,6 +14,7 @@ The callers (pi-geocode, pi-poi) do the talking. That split is what makes it
 testable without either service running, and both services are large enough
 that having the logic depend on them would mean never testing it.
 """
+import fcntl
 import json
 import math
 import re
@@ -586,6 +587,13 @@ def marker_lines(body, epoch, limit=200, slot=None):
 # Kept beside marker_lines because it is the same feed seen from the other end:
 # marker_lines makes a block, this decides which blocks are showing. Both
 # pi-poi and pi-zoom write here, which is why it is not in either of them.
+# Layers that "clear the map" leaves alone. Everything else on the map is
+# something the user asked for and can ask to remove; these are the world
+# reporting itself, and clearing your radio contacts because you cleared a cafe
+# search would be a surprise.
+RESERVED_LAYERS = ("mesh",)
+
+
 def read_layers(path):
     """{category: block of lines}, or {} for anything unreadable.
 
@@ -602,15 +610,51 @@ def read_layers(path):
     return {str(k): str(v) for k, v in doc.items() if v}
 
 
-def write_layers(layers, markers, path):
+def _lock(path):
+    """Exclusive lock around the layer store.
+
+    There is more than one producer now -- a POI search and the Meshtastic node
+    feed -- and each does read-modify-write on the same file. Without this, two
+    of them interleaving loses whichever wrote first.
+    """
+    lock = open(path + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    return lock
+
+
+def update_layer(name, block, markers, path):
+    """Replace one layer, keep the rest, rebuild the feed. Locked.
+
+    `block` of "" removes the layer. This is the only safe way for two
+    processes to share the feed: each owns its own key and never reads or
+    writes anyone else's.
+    """
+    lock = _lock(path)
+    try:
+        layers = read_layers(path)
+        if block and block.strip():
+            layers[name] = block
+        else:
+            layers.pop(name, None)
+        return write_layers(layers, markers, path, _locked=True)
+    finally:
+        lock.close()
+
+
+def write_layers(layers, markers, path, _locked=False):
     """Save the per-layer blocks and rebuild the flat feed from them."""
-    with open(path, "w") as fh:
-        json.dump(layers, fh)
-    body = "\n".join(block.strip("\n") for block in layers.values()
-                      if block.strip())
-    with open(markers, "w") as fh:
-        fh.write(body + ("\n" if body else ""))
-    return body
+    lock = None if _locked else _lock(path)
+    try:
+        with open(path, "w") as fh:
+            json.dump(layers, fh)
+        body = "\n".join(block.strip("\n") for block in layers.values()
+                          if block.strip())
+        with open(markers, "w") as fh:
+            fh.write(body + ("\n" if body else ""))
+        return body
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def bbox_of(lines):

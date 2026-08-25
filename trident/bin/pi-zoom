@@ -208,9 +208,7 @@ def main():
         line = "poi%d-zoom %.6f %.6f %d %s" % (
             geo.colour_slot(LAYER), flat, flon, int(time.time()),
             name.replace(" ", "_"))
-        layers = geo.read_layers(LAYERS)
-        layers[LAYER] = line
-        geo.write_layers(layers, markers=MARKERS, path=LAYERS)
+        geo.update_layer(LAYER, line, markers=MARKERS, path=LAYERS)
 
     if args.json:
         print(json.dumps({"name": name, "lat": flat, "lon": flon,

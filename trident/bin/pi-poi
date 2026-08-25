@@ -117,14 +117,14 @@ def main():
                        for a in sys.argv[1:])
 
     if args.category == "clear":
-        # Both, and in this order: a layer file left behind would put the
-        # markers straight back the next time anything is added.
-        try:
-            os.unlink(LAYERS)
-        except OSError:
-            pass
-        open(MARKERS, "w").close()
-        print("cleared")
+        # Everything the user put on the map, and nothing else. The Meshtastic
+        # node feed is not a search result: it is the radio reporting who is
+        # out there, and clearing your contacts because you cleared a cafe
+        # search would be a surprise. geo.RESERVED_LAYERS says which stay.
+        kept = {k: v for k, v in geo.read_layers(LAYERS).items()
+                if k in geo.RESERVED_LAYERS}
+        geo.write_layers(kept, markers=MARKERS, path=LAYERS)
+        print("cleared" + (" (kept: %s)" % ", ".join(sorted(kept)) if kept else ""))
         return 0
 
     lat = lon = None
@@ -185,12 +185,7 @@ def main():
 
     # Replace this category, keep the others. Searching cafes twice should not
     # leave two overlapping sets of cafes, and should not remove the hotels.
-    layers = geo.read_layers(LAYERS)
-    if lines:
-        layers[key] = lines
-    else:
-        layers.pop(key, None)
-    geo.write_layers(layers, markers=MARKERS, path=LAYERS)
+    geo.update_layer(key, lines, markers=MARKERS, path=LAYERS)
 
     # Fit the camera to what was just found, not to everything on the map: the
     # answer to the question just asked is what should be on screen. Both sets
