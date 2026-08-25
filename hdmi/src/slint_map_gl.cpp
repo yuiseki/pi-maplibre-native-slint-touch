@@ -1,5 +1,6 @@
 #include "slint_map_gl.hpp"
 
+#include <map>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -130,13 +131,36 @@ struct MarkerBucket {
     mbgl::Color color;
     float opacity;
 };
+
+// How faded a stale marker is. It has to read as "this is old" without reading
+// as "this is not there": at 0.30 the labels were legible only up close, and a
+// node whose position had simply aged past the threshold looked absent rather
+// than out of date. 0.55 keeps the distinction clear and the text readable.
+//
+// Tunable from the environment because this is a judgement about how a screen
+// looks, and the binary takes about fifteen minutes to carry to the deck over
+// the Pi wireless. Trying a value should not cost a rebuild.
+// Sentinel in the table: a bucket carrying this takes whatever stale_opacity()
+// returns at layer-creation time. The table is constexpr, so it cannot call a
+// function; a value nothing else would use marks the rows that are "the faded
+// ones" without a second field.
+constexpr float kStaleMarker = -1.0f;
+
+float stale_opacity() {
+    if (const char* e = std::getenv("MAPLIBRE_STALE_OPACITY")) {
+        const float v = std::strtof(e, nullptr);
+        if (v > 0.0f && v <= 1.0f)
+            return v;
+    }
+    return 0.55f;
+}
 const MarkerBucket kBuckets[] = {
     {"pi-mesh-nodes-stale", "pi-mesh-nodes-stale-circles",
-     "pi-mesh-nodes-stale-labels", mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 0.30f},
+     "pi-mesh-nodes-stale-labels", mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, kStaleMarker},
     {"pi-mesh-nodes", "pi-mesh-nodes-circles",
      "pi-mesh-nodes-labels", mbgl::Color{1.0f, 0.35f, 0.35f, 1.0f}, 1.0f},
     {"pi-self-stale", "pi-self-stale-circles",
-     "pi-self-stale-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 0.30f},
+     "pi-self-stale-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, kStaleMarker},
     {"pi-self", "pi-self-circles",
      "pi-self-labels", mbgl::Color{0.30f, 0.55f, 1.0f, 1.0f}, 1.0f},
     // POI palette, slots 0..7. A place is not a position: it does not go out
@@ -164,6 +188,34 @@ constexpr size_t kBucketCount = sizeof(kBuckets) / sizeof(kBuckets[0]);
 constexpr size_t kPoiBucket0 = 4;      // where the palette starts above
 constexpr size_t kPoiColours = kBucketCount - kPoiBucket0;
 
+// Label stacking for co-located markers. 1.0 is roughly one line of text at
+// this size, and 0.9 matches the single-marker offset the labels had before,
+// so a lone marker looks exactly as it always did.
+constexpr float kLabelStackBase = 0.9f;
+constexpr float kLabelStackStep = 1.0f;
+constexpr int kLabelStackMax = 5;
+
+// The vertical offset for a label, in ems, from its "stack" property. Built as
+// nested steps: level 0 keeps the offset a lone marker always had, and each
+// further level is one line higher, so co-located nodes read top to bottom as a
+// short list over a single dot.
+std::unique_ptr<mbgl::style::expression::Expression> stack_offset_expr() {
+    namespace dsl = mbgl::style::expression::dsl;
+    // double, not float: the expression Value variant has a double alternative
+    // and no float one, so a float argument finds no matching constructor.
+    auto at = [](int level) {
+        return dsl::literal(static_cast<double>(kLabelStackBase +
+                                                kLabelStackStep * level));
+    };
+    auto expr = at(kLabelStackMax - 1);
+    // Fold downwards: step(stack, <level n-1>, n, ...) built from the top so
+    // each step's default is everything below it.
+    for (int level = kLabelStackMax - 1; level > 0; --level)
+        expr = dsl::step(dsl::number(dsl::get("stack")), at(level - 1),
+                         static_cast<double>(level), std::move(expr));
+    return expr;
+}
+
 // Bucket order: node-stale, node-fresh, self-stale, self-fresh, then the POI
 // palette. Later buckets are added later, so the live own position ends up on
 // top of the radio nodes -- and the POIs, added last, sit above both, which is
@@ -188,16 +240,38 @@ void SlintMapGL::apply_mesh_nodes() {
         return;
     auto& style = map->getStyle();
 
+    // Two nodes sitting in the same room land on the same coordinate, and with
+    // position_precision 13 the mesh quantises to about 54m, so it happens even
+    // when they are metres apart. Their labels then print exactly on top of each
+    // other and read as one smudge.
+    //
+    // The dot stays where the node says it is -- moving it would be inventing a
+    // position. Only the label moves: co-located nodes get a stack index, and
+    // the label layer turns that into a vertical offset, so one dot carries a
+    // short list of who is there.
+    //
+    // Grouped at about 11m (5 decimal places), which is finer than the mesh's
+    // own quantisation, so anything the mesh reports as the same place is the
+    // same group here.
+    std::map<std::pair<long long, long long>, int> seen_at;
     mbgl::FeatureCollection buckets[kBucketCount];
     for (const auto& n : mesh_nodes_) {
         mapbox::geojson::feature f{mapbox::geometry::point<double>{n.lon, n.lat}};
         f.properties["id"] = n.id;
         f.properties["name"] = n.name;
+        const auto key = std::make_pair(llround(n.lat * 1e5), llround(n.lon * 1e5));
+        const int stack = seen_at[key]++;
+        // Stack index is only meaningful up to a handful: past that the labels
+        // would march off the top of the screen, so they pile back up and the
+        // reader can at least see that something is crowded.
+        f.properties["stack"] = static_cast<double>(stack % kLabelStackMax);
         buckets[bucket_of(n)].push_back(std::move(f));
     }
 
+    const float faded = stale_opacity();
     for (size_t i = 0; i < kBucketCount; ++i) {
         const auto& b = kBuckets[i];
+        const float opacity = (b.opacity == kStaleMarker) ? faded : b.opacity;
         auto* existing = style.getSource(b.source_id);
         if (!existing) {
             auto source = std::make_unique<mbgl::style::GeoJSONSource>(b.source_id);
@@ -208,10 +282,10 @@ void SlintMapGL::apply_mesh_nodes() {
                                                                    b.source_id);
             layer->setCircleRadius(7.0f);
             layer->setCircleColor(b.color);
-            layer->setCircleOpacity(b.opacity);
+            layer->setCircleOpacity(opacity);
             layer->setCircleStrokeWidth(2.0f);
             layer->setCircleStrokeColor(mbgl::Color::white());
-            layer->setCircleStrokeOpacity(b.opacity);
+            layer->setCircleStrokeOpacity(opacity);
             style.addLayer(std::move(layer));          // on top of everything
 
             // Label above the dot. text-field reads the feature's "name", so
@@ -229,11 +303,24 @@ void SlintMapGL::apply_mesh_nodes() {
             labels->setTextFont({std::vector<std::string>{"Noto Sans Bold"}});
             labels->setTextSize(13.0f);
             labels->setTextAnchor(mbgl::style::SymbolAnchorType::Bottom);
-            labels->setTextOffset(std::array<float, 2>{{0.0f, -0.9f}});
+            // Anchored at the bottom, a positive radial offset moves the label
+            // straight up (see evaluateRadialOffset in symbol_layout.cpp), and
+            // the layout evaluates it per feature -- which is what lets one
+            // layer stack several labels over one dot. It also takes precedence
+            // over text-offset, so the old fixed offset is left off entirely
+            // rather than set and silently ignored.
+            //
+            // step rather than interpolate: interpolate clamps outside its
+            // stops instead of extrapolating, so stacks 2 and up would all sit
+            // on stack 1. Nested steps give each level its own exact value.
+            labels->setTextRadialOffset(
+                mbgl::style::PropertyValue<float>(
+                    mbgl::style::PropertyExpression<float>(
+                        stack_offset_expr())));
             labels->setTextAllowOverlap(true);
             labels->setTextIgnorePlacement(true);
             labels->setTextColor(b.color);
-            labels->setTextOpacity(b.opacity);
+            labels->setTextOpacity(opacity);
             labels->setTextHaloColor(mbgl::Color::white());
             labels->setTextHaloWidth(1.5f);
             style.addLayer(std::move(labels));
