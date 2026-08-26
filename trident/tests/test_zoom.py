@@ -190,5 +190,108 @@ class PiZoomTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+
+def load_zoom():
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("pi_zoom", PI_ZOOM)
+    spec = importlib.util.spec_from_loader("pi_zoom", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+Z = load_zoom()
+
+
+class EnglishNameTest(unittest.TestCase):
+    """"zoom in to Hiroshima station", said while listening in English.
+
+    The intent rule already produced zoom_to with place="Hiroshima station";
+    what failed was turning that into coordinates. Two separate reasons, and
+    fixing either alone still finds nothing:
+
+    The suffix table was Japanese only, so "station" was not recognised as
+    saying what kind of thing this is, and the name was looked up whole.
+
+    And the name tag is Japanese. Checked against this deck's own Overpass:
+    Hiroshima's station node is name=広島, railway=station, with name:en set to
+    "Hiroshima" -- no "Station" in it, in either language. So the English lookup
+    has to drop the suffix *and* ask name:en.
+    """
+
+    def test_an_english_suffix_says_what_kind_of_thing_it_is(self):
+        self.assertEqual(Z.split_suffix("Hiroshima station"),
+                         ("Hiroshima", ("railway", "station")))
+
+    def test_capitalisation_from_a_microphone_varies(self):
+        """whisper writes "Hiroshima Station" as readily as "station"."""
+        for said in ("Hiroshima Station", "Hiroshima STATION", "hiroshima station"):
+            got = Z.split_suffix(said)
+            self.assertIsNotNone(got, said)
+            self.assertEqual(got[1], ("railway", "station"), said)
+
+    def test_the_japanese_suffixes_still_work(self):
+        self.assertEqual(Z.split_suffix("広島駅"),
+                         ("広島", ("railway", "station")))
+        self.assertEqual(Z.split_suffix("羽田空港"),
+                         ("羽田", ("aeroway", "aerodrome")))
+
+    def test_a_name_that_is_only_a_suffix_is_not_split(self):
+        """"Station" alone names nothing; splitting it would query for an empty
+        name and match every station in range."""
+        self.assertIsNone(Z.split_suffix("station"))
+        self.assertIsNone(Z.split_suffix("駅"))
+
+    def test_a_name_with_no_suffix_is_left_alone(self):
+        self.assertIsNone(Z.split_suffix("Hiroshima"))
+        self.assertIsNone(Z.split_suffix("広島国際会議場"))
+
+    def test_the_suffix_must_be_a_whole_word_in_english(self):
+        """Otherwise "Preston" ends in "ston" and half of England becomes a
+        station. Japanese has no spaces, so only the Latin side needs this."""
+        self.assertIsNone(Z.split_suffix("Preston"))
+        self.assertIsNone(Z.split_suffix("Newport"))
+
+
+class NameQueryTest(unittest.TestCase):
+    def test_both_name_and_name_en_are_asked_for(self):
+        q = Z.find_named_query("Hiroshima", 34.4, 132.5, 30000, 60)
+        self.assertIn('"name"', q)
+        self.assertIn('"name:en"', q)
+
+    def test_a_lowercase_spoken_name_still_asks_for_the_osm_spelling(self):
+        """whisper writes what it hears; OSM's name:en follows its own
+        convention, and only the two agreeing finds anything."""
+        q = Z.find_named_query("hiroshima", 34.4, 132.5, 30000, 60)
+        self.assertIn('"name:en"="Hiroshima"', q)
+
+    def test_the_lookup_stays_an_exact_match(self):
+        """Overpass serves ["name"="X"] from an index and a regex from a scan,
+        and the wide search is 400km across. A case-insensitive regex here is
+        the difference between a lookup and a sweep -- it is what made this
+        time out on the real Overpass."""
+        q = Z.find_named_query("Hiroshima", 34.4, 132.5, 400000, 60)
+        self.assertNotIn("~", q)
+        self.assertIn('"name"="Hiroshima"', q)
+
+    def test_japanese_asks_once_rather_than_three_times(self):
+        """title() and capitalize() are no-ops on kanji; asking anyway would
+        triple the query for nothing."""
+        self.assertEqual(Z.name_variants("広島"), ["広島"])
+
+    def test_a_quote_cannot_end_the_string_early(self):
+        """The name came out of a microphone and Overpass QL is a language."""
+        q = Z.find_named_query('a"b', 34.4, 132.5, 30000, 60)
+        self.assertIn(r'a\"b', q)
+
+    def test_the_kind_query_carries_the_tag_and_the_stem(self):
+        q = Z.find_by_kind_query("Hiroshima", ("railway", "station"),
+                                 34.4, 132.5, 30000, 60)
+        self.assertIn('"railway"="station"', q)
+        self.assertIn("Hiroshima", q)
+        self.assertIn('"name:en"', q)
+
+
 if __name__ == "__main__":
     unittest.main()

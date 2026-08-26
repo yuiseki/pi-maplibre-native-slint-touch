@@ -73,6 +73,39 @@ SUFFIX_TAGS = {
     "公園": ("leisure", "park"),
 }
 
+# The same idea in English, for when the deck is listening in English. Matched
+# as whole words, which Japanese does not need and Latin does: "Preston" ends in
+# "ston" and "Newport" in "port", and a substring rule would turn half of
+# England into a railway station.
+EN_SUFFIX_TAGS = {
+    "ferry terminal": ("amenity", "ferry_terminal"),
+    "station": ("railway", "station"),
+    "airport": ("aeroway", "aerodrome"),
+    "port": ("amenity", "ferry_terminal"),
+    "university": ("amenity", "university"),
+    "castle": ("historic", "castle"),
+    "shrine": ("amenity", "place_of_worship"),
+    "temple": ("amenity", "place_of_worship"),
+    "park": ("leisure", "park"),
+}
+
+
+def split_suffix(name):
+    """(stem, (key, value)) when the name says what kind of thing it is.
+
+    None when it does not, or when the suffix is the whole name: "station" on
+    its own would leave an empty stem and match every station in range.
+    """
+    name = (name or "").strip()
+    for suffix, kv in SUFFIX_TAGS.items():
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[:-len(suffix)].strip(), kv
+    low = name.lower()
+    for suffix, kv in EN_SUFFIX_TAGS.items():
+        if low.endswith(" " + suffix):
+            return name[:-(len(suffix) + 1)].strip(), kv
+    return None
+
 
 def ask_overpass(query, timeout=60):
     url = OVERPASS.rstrip("/") + "/api/interpreter"
@@ -87,27 +120,66 @@ def quote(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def name_variants(name):
+    """The spellings worth asking for, in order, without duplicates.
+
+    Exact matches only. Overpass serves ["name"="X"] from an index and a regex
+    from a scan, and the wide search is 400km across; the case-insensitive
+    regex this started as is the difference between a lookup and a sweep, and
+    it timed the real Overpass out.
+
+    So the capitalisation is enumerated instead. whisper writes what it hears
+    ("hiroshima station" as readily as "Hiroshima Station") while OSM's name:en
+    follows its own convention, and only the two agreeing finds anything. On
+    Japanese every variant collapses to the same string and the list is one long.
+    """
+    out = []
+    for v in (name, name.title(), name.capitalize()):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def name_clauses(name, extra, radius, lat, lon):
+    """One clause per (name key, spelling) pair.
+
+    OSM Japan files a station under its Japanese name -- Hiroshima's is
+    name=広島, railway=station -- with name:en alongside, and neither contains
+    the word "Station". So an English request has to ask name:en; asking both
+    keys keeps one code path for both languages.
+    """
+    return "".join(
+        'nwr%s["%s"="%s"](around:%d,%.6f,%.6f);'
+        % (extra, key, quote(v), radius, lat, lon)
+        for key in ("name", "name:en")
+        for v in name_variants(name))
+
+
+def find_named_query(name, lat, lon, radius, timeout=60):
+    return ('[out:json][timeout:%d];(%s);out center 20;'
+            % (timeout, name_clauses(name, "", radius, lat, lon)))
+
+
 def find_named(name, lat, lon, radius, timeout=60):
-    """Features with exactly this name within `radius` of lat/lon."""
-    q = ('[out:json][timeout:%d];nwr["name"="%s"](around:%d,%.6f,%.6f);'
-         'out center 20;' % (timeout, quote(name), radius, lat, lon))
-    return _ask(q, timeout)
+    """Features with this name within `radius` of lat/lon."""
+    return _ask(find_named_query(name, lat, lon, radius, timeout), timeout)
+
+
+def find_by_kind_query(stem, kv, lat, lon, radius, timeout=60):
+    key, value = kv
+    extra = '["%s"="%s"]' % (key, value)
+    return ('[out:json][timeout:%d];(%s);out center 20;'
+            % (timeout, name_clauses(stem, extra, radius, lat, lon)))
 
 
 def find_by_kind(name, lat, lon, radius, timeout=60):
     """The suffix says what kind of thing; the rest is the name it is filed
     under. Returns [] when the name has no suffix we know."""
-    for suffix, (key, value) in SUFFIX_TAGS.items():
-        if not name.endswith(suffix) or len(name) <= len(suffix):
-            continue
-        stem = name[:-len(suffix)]
-        q = ('[out:json][timeout:%d];nwr["%s"="%s"]["name"="%s"]'
-             '(around:%d,%.6f,%.6f);out center 20;'
-             % (timeout, key, value, quote(stem), radius, lat, lon))
-        found = _ask(q, timeout)
-        if found:
-            return found
-    return []
+    split = split_suffix(name)
+    if not split:
+        return []
+    stem, kv = split
+    return _ask(find_by_kind_query(stem, kv, lat, lon, radius, timeout), timeout)
 
 
 def _ask(q, timeout):
