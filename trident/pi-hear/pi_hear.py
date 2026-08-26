@@ -20,6 +20,7 @@ import argparse
 import collections
 import contextlib
 import os
+import re
 import queue
 import subprocess
 import sys
@@ -112,6 +113,69 @@ def make_alsa_reader(proc, audio_q, stop, blocksize, on_death=None):
     return reader
 
 
+
+def capture_card_names(pcm_text, cards_text):
+    """ALSA card names that can actually record.
+
+    Two files, because neither answers on its own: /proc/asound/pcm says which
+    card numbers have a capture stream, and /proc/asound/cards maps a number to
+    the name that plughw:CARD= wants. Card numbers move when USB enumerates in a
+    different order; the names do not, which is why the config uses them.
+    """
+    nums = set()
+    for line in (pcm_text or "").splitlines():
+        if "capture" not in line:
+            continue
+        head = line.split(":", 1)[0].strip()
+        try:
+            nums.add(int(head.split("-")[0]))
+        except ValueError:
+            continue
+    out = []
+    for line in (cards_text or "").splitlines():
+        m = re.match(r"\s*(\d+)\s*\[([^\]]+)\]", line)
+        if m and int(m.group(1)) in nums:
+            out.append(m.group(2).strip())
+    return out
+
+
+def read_capture_cards(pcm="/proc/asound/pcm", cards="/proc/asound/cards"):
+    def read(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+    return capture_card_names(read(pcm), read(cards))
+
+
+def pick_alsa_device(spec, available):
+    """The first PCM in a "|"-separated preference list that can record.
+
+    "|" rather than "," because a PCM name already contains commas
+    (plughw:CARD=MINI,DEV=0).
+
+    An entry that names no card is returned unchecked: a bluealsa PCM is not a
+    card and trying it is the only way to find out, and refusing would break the
+    case --alsa-device was added for.
+
+    An attached mic that nobody listed is used rather than nothing. Naming a mic
+    that is absent is not a quiet degradation -- arecord exits, pi-hear exits
+    with it, and systemd restarts the pair forever -- so the fallback is what
+    keeps a newly-bought device working without an edit.
+    """
+    entries = [e.strip() for e in (spec or "").split("|") if e.strip()]
+    for entry in entries:
+        m = re.search(r"CARD=([^,\s]+)", entry)
+        if not m:
+            return entry
+        if m.group(1) in available:
+            return entry
+    if available:
+        return "plughw:CARD=%s,DEV=0" % available[0]
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="pi-hear: Japanese speech → text (VAD-segmented, pluggable ASR)"
@@ -138,7 +202,10 @@ def main():
         "--alsa-device", default=None,
         help="capture via arecord from this ALSA PCM instead of sounddevice "
              "(e.g. 'bluealsa:DEV=20:74:CF:D2:A3:84,PROFILE=sco' for a BT mic "
-             "that PortAudio can't enumerate). Implies S16_LE mono at --samplerate.",
+             "that PortAudio can't enumerate). Implies S16_LE mono at "
+             "--samplerate. Several may be given in preference order separated "
+             "by '|' -- the first whose card can record is used, so the deck "
+             "works with whichever mic happens to be plugged in",
     )
     ap.add_argument("--samplerate", type=int, default=48000,
                     help="capture rate; engines resample to 16k as needed")
@@ -497,6 +564,20 @@ def main():
     peak = 0.0
 
     arec = None
+    if args.alsa_device:
+        available = read_capture_cards()
+        chosen = pick_alsa_device(args.alsa_device, available)
+        if chosen is None:
+            print("pi-hear: no capture device at all (asked for %r); "
+                  "exiting for systemd to retry" % args.alsa_device,
+                  file=sys.stderr, flush=True)
+            publish_state("down", "", hold=0.0, override=True)
+            return 1
+        if chosen != args.alsa_device:
+            print("pi-hear: using %s (attached: %s)"
+                  % (chosen, ", ".join(available) or "none"),
+                  file=sys.stderr, flush=True)
+        args.alsa_device = chosen
     if args.alsa_device:
         # arecord-based capture for ALSA PCMs PortAudio can't enumerate (e.g. a
         # bluealsa BT mic). A reader thread feeds audio_q exactly like the
