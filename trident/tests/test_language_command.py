@@ -139,5 +139,79 @@ class DispatchTest(unittest.TestCase):
                          "Switching to English.")
 
 
+
+class MisheardStemTest(unittest.TestCase):
+    """The stem of 言語 is not reliable; the language name is.
+
+    Real transcripts from pi5-deck, 2026-08-27, of "オーケートライデント 言語
+    モード 英語" spoken twice: both came back as 銀河モード 英語. げんご and
+    ぎんが are not close as sounds, and whisper-base picked the commoner word.
+
+    Enumerating mishearings of the stem is a losing game -- 元号, 原稿 and 減５
+    are all one bad frame away. So the rule keys on the half that survives: the
+    language name, with モード present to stop a bare 英語 switching anything.
+    """
+
+    HEARD = (
+        ("銀河モード 英語", "en"),
+        ("銀河モード 日本語", "ja"),
+        ("元号モード 英語", "en"),
+        ("モード 英語", "en"),
+        ("ぎんがモード エイゴ", "en"),
+    )
+
+    def test_a_misheard_stem_still_switches(self):
+        for text, want in self.HEARD:
+            r = intent.by_rule(text)
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "set_language", text)
+            self.assertEqual(r["lang"], want, text)
+
+    def test_the_name_alone_is_not_a_switch(self):
+        """Otherwise "show me an English pub" would change the language."""
+        for text in ("英語", "日本語", "英語の看板"):
+            r = intent.by_rule(text)
+            if r is not None:
+                self.assertNotEqual(r["intent"], "set_language", text)
+
+    def test_a_place_that_merely_contains_the_word_is_not_a_switch(self):
+        r = intent.by_rule("銀河高原ビール")
+        if r is not None:
+            self.assertNotEqual(r["intent"], "set_language")
+
+
+
+class NoDeadEndTest(unittest.TestCase):
+    """Getting into English must not be a one-way trip.
+
+    The way back is spoken in English, so it is recognised in English, where the
+    stem is just as fragile: the comment on _LANG_ATTEMPT records the map flying
+    to "Rangage" and "Languise" when these attempts failed to parse. A stem-only
+    rule leaves the deck stuck in a language its owner may not want, with no
+    voice route home.
+    """
+
+    def test_a_misheard_stem_still_gets_back(self):
+        for text in ("Rangage mode Japanese",
+                     "Languise mode Japanese",
+                     "Language mode, Japanese."):
+            r = intent.by_rule(text, lang="en")
+            self.assertIsNotNone(r, text)
+            self.assertEqual(r["intent"], "set_language", text)
+            self.assertEqual(r["lang"], "ja", text)
+
+    def test_english_asks_for_english_is_still_honoured(self):
+        """Not a no-op to guard against: saying it twice must not toggle away."""
+        r = intent.by_rule("Rangage mode English", lang="en")
+        self.assertIsNotNone(r)
+        self.assertEqual(r["lang"], "en")
+
+    def test_a_language_name_alone_is_not_a_switch(self):
+        for text in ("Japanese", "an English pub", "Japanese restaurant"):
+            r = intent.by_rule(text, lang="en")
+            if r is not None:
+                self.assertNotEqual(r["intent"], "set_language", text)
+
+
 if __name__ == "__main__":
     unittest.main()

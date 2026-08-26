@@ -260,6 +260,30 @@ _LANG_JA = re.compile(
     r"(?:言語|げんご|ゲンゴ)\s*モード"          # the phrase, however it is written
     r"|(英語|エイゴ|日本語|ニホンゴ)\s*モード")   # ...or just "<language> mode"
 _LANG_JA_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ)")
+_MODE_WORD = re.compile(r"モード|\bmode\b", re.I)
+_LANG_ANY_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ|japanese|english|nihongo)",
+                            re.I)
+
+
+def _looks_like_language_switch(text):
+    """モード plus a language name, in either order.
+
+    The stem is the unreliable half. Two real transcripts of "言語モード 英語"
+    on 2026-08-27 both came back as 銀河モード 英語: げんご and ぎんが are not
+    close as sounds, but 銀河 is the commoner word and whisper-base reached for
+    it. 元号 and 原稿 are the same accident waiting to happen, so listing them
+    one at a time only ever catches the mishearing that already bit.
+
+    The language name survives, so that is what this keys on. モード is still
+    required, or "an English pub" would change the language mid-sentence.
+
+    English names count too, because the way out of English is spoken in
+    English and its stem is no sturdier: the note on _LANG_ATTEMPT records the
+    map flying to "Rangage" and "Languise". Without this the deck can be talked
+    into a language it cannot be talked out of.
+    """
+    return bool(_MODE_WORD.search(text) and _LANG_ANY_NAME.search(text))
+
 
 _LANG_NAMES = {"japanese": "ja", "nihongo": "ja", "日本語": "ja",
                "ニホンゴ": "ja", "english": "en", "英語": "en", "エイゴ": "en"}
@@ -499,13 +523,14 @@ def by_rule(transcript, lang=None):
             out = _empty("set_language")
             out["lang"] = lang
             return out
-    if _LANG_JA.search(text) or _LANG_EN_BARE.search(text):
+    if (_LANG_JA.search(text) or _LANG_EN_BARE.search(text)
+            or _looks_like_language_switch(text)):
         # The phrase and the language name arrive as separate fragments often
         # enough (ゲンゴモード + 英語) that they are matched separately. A
         # readable name wins; without one, fall back to "the other language",
         # which is the only thing the request can mean.
-        n = _LANG_JA_NAME.search(text)
-        want = _LANG_NAMES.get(n.group(1)) if n else _other_language(lang)
+        n = _LANG_ANY_NAME.search(text)
+        want = _LANG_NAMES.get(n.group(1).lower()) if n else _other_language(lang)
         if want:
             out = _empty("set_language")
             out["lang"] = want
