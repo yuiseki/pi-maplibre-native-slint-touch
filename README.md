@@ -35,6 +35,19 @@ This repository is the hardware-specific, opinionated distribution that ties
 those together with device-tree overlays, touch calibration, screensaver, and
 systemd units.
 
+## License
+
+The code in this repository is [MIT licensed](LICENSE).
+
+Two caveats, because this repository is a distribution rather than a library:
+
+- The bundled icons under `hdmi/assets/` keep their own licenses (CC BY 3.0,
+  CC BY 4.0, MIT); see [`hdmi/assets/ATTRIBUTION.md`](hdmi/assets/ATTRIBUTION.md).
+- Dependencies keep their own terms. In particular a binary built from this
+  repository links Slint, whose licensing (royalty-free / GPL / commercial) you
+  must satisfy separately, and the speech models used by `trident/` are not MIT
+  (see [`trident/README.md`](trident/README.md)).
+
 ## Credits
 
 Built on [maplibre/maplibre-native-slint](https://github.com/maplibre/maplibre-native-slint)

@@ -2,6 +2,7 @@
 name = "maplibre_native_slint"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [features]
 metal = ["maplibre_native/metal"]
