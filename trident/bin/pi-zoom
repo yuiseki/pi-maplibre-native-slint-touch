@@ -73,6 +73,53 @@ SUFFIX_TAGS = {
     "公園": ("leisure", "park"),
 }
 
+# The same idea in English, for when the deck is listening in English. Matched
+# as whole words, which Japanese does not need and Latin does: "Preston" ends in
+# "ston" and "Newport" in "port", and a substring rule would turn half of
+# England into a railway station.
+EN_SUFFIX_TAGS = {
+    "ferry terminal": ("amenity", "ferry_terminal"),
+    "station": ("railway", "station"),
+    "airport": ("aeroway", "aerodrome"),
+    "port": ("amenity", "ferry_terminal"),
+    "university": ("amenity", "university"),
+    "castle": ("historic", "castle"),
+    "shrine": ("amenity", "place_of_worship"),
+    "temple": ("amenity", "place_of_worship"),
+    "park": ("leisure", "park"),
+}
+
+
+def split_suffix(name):
+    """(stem, (key, value)) when the name says what kind of thing it is.
+
+    None when it does not, or when the suffix is the whole name: "station" on
+    its own would leave an empty stem and match every station in range.
+    """
+    name = (name or "").strip()
+    for suffix, kv in SUFFIX_TAGS.items():
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[:-len(suffix)].strip(), kv
+    low = name.lower()
+    for suffix, kv in EN_SUFFIX_TAGS.items():
+        if low.endswith(" " + suffix):
+            return name[:-(len(suffix) + 1)].strip(), kv
+    # ...and with the space missing, which is how whisper writes an unstressed
+    # suffix after a name it did not recognise: 上野 came back as
+    # "whenostation", one word.
+    #
+    # Only the long suffixes, and only leaving a stem of three or more. A short
+    # one glued to a word is far more likely to be that word than a compound:
+    # "Newport" is not a ferry terminal called New, and "Boston" is not a
+    # station. Seven letters is the line because that is where the ordinary
+    # English words stop -- and it is the same false positive the spaced rule
+    # already guards against, arrived at from the other direction.
+    for suffix, kv in EN_SUFFIX_TAGS.items():
+        if (len(suffix) >= 7 and low.endswith(suffix)
+                and len(low) - len(suffix) >= 3):
+            return name[:len(low) - len(suffix)].strip(), kv
+    return None
+
 
 def ask_overpass(query, timeout=60):
     url = OVERPASS.rstrip("/") + "/api/interpreter"
@@ -87,27 +134,147 @@ def quote(s):
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def name_variants(name):
+    """The spellings worth asking for, in order, without duplicates.
+
+    Exact matches only. Overpass serves ["name"="X"] from an index and a regex
+    from a scan, and the wide search is 400km across; the case-insensitive
+    regex this started as is the difference between a lookup and a sweep, and
+    it timed the real Overpass out.
+
+    So the capitalisation is enumerated instead. whisper writes what it hears
+    ("hiroshima station" as readily as "Hiroshima Station") while OSM's name:en
+    follows its own convention, and only the two agreeing finds anything. On
+    Japanese every variant collapses to the same string and the list is one long.
+    """
+    out = []
+    for v in (name, name.title(), name.capitalize()):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def name_clauses(name, extra, radius, lat, lon):
+    """One clause per (name key, spelling) pair.
+
+    OSM Japan files a station under its Japanese name -- Hiroshima's is
+    name=広島, railway=station -- with name:en alongside, and neither contains
+    the word "Station". So an English request has to ask name:en; asking both
+    keys keeps one code path for both languages.
+    """
+    return "".join(
+        'nwr%s["%s"="%s"](around:%d,%.6f,%.6f);'
+        % (extra, key, quote(v), radius, lat, lon)
+        for key in ("name", "name:en")
+        for v in name_variants(name))
+
+
+def find_named_query(name, lat, lon, radius, timeout=60):
+    return ('[out:json][timeout:%d];(%s);out center 20;'
+            % (timeout, name_clauses(name, "", radius, lat, lon)))
+
+
 def find_named(name, lat, lon, radius, timeout=60):
-    """Features with exactly this name within `radius` of lat/lon."""
-    q = ('[out:json][timeout:%d];nwr["name"="%s"](around:%d,%.6f,%.6f);'
-         'out center 20;' % (timeout, quote(name), radius, lat, lon))
-    return _ask(q, timeout)
+    """Features with this name within `radius` of lat/lon."""
+    return _ask(find_named_query(name, lat, lon, radius, timeout), timeout)
+
+
+def find_by_kind_query(stem, kv, lat, lon, radius, timeout=60):
+    key, value = kv
+    extra = '["%s"="%s"]' % (key, value)
+    return ('[out:json][timeout:%d];(%s);out center 20;'
+            % (timeout, name_clauses(stem, extra, radius, lat, lon)))
 
 
 def find_by_kind(name, lat, lon, radius, timeout=60):
     """The suffix says what kind of thing; the rest is the name it is filed
     under. Returns [] when the name has no suffix we know."""
-    for suffix, (key, value) in SUFFIX_TAGS.items():
-        if not name.endswith(suffix) or len(name) <= len(suffix):
+    split = split_suffix(name)
+    if not split:
+        return []
+    stem, kv = split
+    return _ask(find_by_kind_query(stem, kv, lat, lon, radius, timeout), timeout)
+
+
+# How far a romanised name may be from what was heard, as a fraction of the
+# longer string. Measured against the 686 station names within 20km of the map
+# on 2026-08-27: Ekebukro->Ikebukuro is 0.222 and wheno->Ueno is 0.400, while
+# the unrecoverable ones ("severe" for 渋谷, "scenic", "sub") are all 0.500 or
+# worse. Two clean groups with a gap, and the line goes in the gap.
+#
+# Refusing matters more than matching. A wrong station flown to confidently is
+# worse than an apology: the map leaves where it was and nothing says it went
+# astray.
+FUZZY_THRESH = 0.45
+
+# The fuzzy pass asks for every feature of a kind and compares them all, so the
+# radius has to stay small -- this is "which station near where I am looking",
+# not a search of the country.
+FUZZY_RADIUS = 20000
+
+
+def best_fuzzy(spoken, names, thresh=FUZZY_THRESH):
+    """The closest romanised name, or None when nothing is close enough."""
+    try:
+        import romaji_match
+    except ImportError as exc:                        # pragma: no cover
+        # Say so. Returning None quietly here cost an hour: every mangled name
+        # came back "nothing found", which is exactly what a working matcher
+        # says about a name it cannot recover, so nothing looked wrong.
+        # romaji_match needs pykakasi, and this runs under the system
+        # interpreter rather than pi-hear's venv.
+        print("pi-zoom: no romaji matching (%s); exact names only" % exc,
+              file=sys.stderr)
+        return None
+    rom = romaji_match.to_romaji(spoken or "")
+    if not rom:
+        return None
+    best, best_d = None, 1.0
+    for name in names:
+        w = romaji_match.to_romaji(name)
+        if not w:
             continue
-        stem = name[:-len(suffix)]
-        q = ('[out:json][timeout:%d];nwr["%s"="%s"]["name"="%s"]'
-             '(around:%d,%.6f,%.6f);out center 20;'
-             % (timeout, key, value, quote(stem), radius, lat, lon))
-        found = _ask(q, timeout)
-        if found:
-            return found
-    return []
+        d = romaji_match._lev(rom, w) / max(len(rom), len(w))
+        if d < best_d:
+            best, best_d = name, d
+    return best if best_d <= thresh else None
+
+
+def romanised_names(elements):
+    """{romanised name: element}, nearest spelling first for a tie.
+
+    name:ja-Latn as well as name:en because they disagree often enough to
+    matter: a station can be filed as "Ikebukuro" in one and "Ikebukuro" with a
+    macron in the other, and what was heard may be closer to either.
+    """
+    out = {}
+    for el in elements:
+        tags = (el or {}).get("tags") or {}
+        for key in ("name:en", "name:ja-Latn"):
+            v = tags.get(key)
+            if v and v not in out:
+                out[v] = el
+    return out
+
+
+def find_fuzzy(name, kv, lat, lon, timeout=60):
+    """Last resort: everything of this kind nearby, matched by sound.
+
+    Only reached when the exact lookups found nothing, because it is the
+    expensive and the fallible one -- it asks for hundreds of features and then
+    guesses among them.
+    """
+    key, value = kv
+    q = ('[out:json][timeout:%d];nwr["%s"="%s"](around:%d,%.6f,%.6f);'
+         'out tags center;' % (timeout, key, value, FUZZY_RADIUS, lat, lon))
+    els = _ask(q, timeout)
+    if not els:
+        return [], None
+    by_name = romanised_names(els)
+    pick_name = best_fuzzy(name, by_name.keys())
+    if not pick_name:
+        return [], None
+    return [by_name[pick_name]], pick_name
 
 
 def _ask(q, timeout):
@@ -192,6 +359,24 @@ def main():
         if found:
             used = radius
             break
+
+    heard_as = None
+    if not found:
+        # Last resort, and only now: ask for everything of the kind nearby and
+        # match by sound. 池袋 and 上野 asked for in English came back as
+        # "Ekebukro Station" and "whenostation", neither of which any exact
+        # lookup can find. This one guesses, so it goes after every lookup that
+        # does not, and it refuses rather than guessing loosely -- see
+        # FUZZY_THRESH.
+        split = split_suffix(name)
+        if split:
+            stem, kv = split
+            elements, heard_as = find_fuzzy(stem, kv, lat, lon)
+            found = pick(elements, lat, lon)
+            if found:
+                used = FUZZY_RADIUS
+                print("pi-zoom: heard %r, matched %r" % (name, heard_as),
+                      file=sys.stderr)
 
     if not found:
         print("pi-zoom: nothing called %r within %dkm"
