@@ -149,6 +149,41 @@ def read_capture_cards(pcm="/proc/asound/pcm", cards="/proc/asound/cards"):
     return capture_card_names(read(pcm), read(cards))
 
 
+def wait_for_capture(probe, timeout, interval, sleep=time.sleep,
+                     announce=None):
+    """Capture-card names once one is attached, or None if the wait runs out.
+
+    On this deck the mic is normally **absent**. It is plugged in to talk to
+    the map and unplugged again -- one left in a noisy room, or a room where
+    someone is working, mishears and acts on things nobody said. So "no capture
+    device" is the resting state, not a fault.
+
+    Treating it as a fault meant exiting for systemd to restart, which measured
+    15 restarts a minute at 1.076s of CPU each: about a quarter of a core burned
+    continuously, and 7,056 journal lines an hour, for a deck sitting idle.
+
+    Waiting is also the faster path when the mic does arrive. Polling notices it
+    within `interval`, where restarting notices it on the next start.
+
+    Not forever, though. A host where the mic really is permanent should still
+    surface its absence, and systemd's restart is how that surfaces.
+    """
+    waited = 0.0
+    told = False
+    while True:
+        cards = probe()
+        if cards:
+            return cards
+        if waited >= timeout:
+            return None
+        if not told:
+            if announce:
+                announce("pi-hear: no microphone attached; waiting")
+            told = True
+        sleep(interval)
+        waited += interval
+
+
 def pick_alsa_device(spec, available):
     """The first PCM in a "|"-separated preference list that can record.
 
@@ -206,6 +241,14 @@ def main():
              "--samplerate. Several may be given in preference order separated "
              "by '|' -- the first whose card can record is used, so the deck "
              "works with whichever mic happens to be plugged in",
+    )
+    ap.add_argument(
+        "--mic-wait", type=float, default=600.0,
+        help="seconds to wait for a capture device to appear before giving up "
+             "and letting systemd restart (default 600). 0 looks once, which "
+             "is right only where the mic is permanent: on a deck where it is "
+             "plugged in to talk and unplugged again, its absence is the "
+             "resting state and restarting on it burns a quarter of a core",
     )
     ap.add_argument("--samplerate", type=int, default=48000,
                     help="capture rate; engines resample to 16k as needed")
@@ -580,11 +623,17 @@ def main():
 
     arec = None
     if args.alsa_device:
-        available = read_capture_cards()
-        chosen = pick_alsa_device(args.alsa_device, available)
+        def say(msg):
+            print(msg, file=sys.stderr, flush=True)
+            publish_state("down", "", hold=0.0, override=True)
+
+        available = wait_for_capture(read_capture_cards, args.mic_wait, 2.0,
+                                     announce=say)
+        chosen = pick_alsa_device(args.alsa_device, available or [])
         if chosen is None:
-            print("pi-hear: no capture device at all (asked for %r); "
-                  "exiting for systemd to retry" % args.alsa_device,
+            print("pi-hear: still no capture device after %.0fs (asked for %r); "
+                  "exiting for systemd to retry" % (args.mic_wait,
+                                                    args.alsa_device),
                   file=sys.stderr, flush=True)
             publish_state("down", "", hold=0.0, override=True)
             return 1
