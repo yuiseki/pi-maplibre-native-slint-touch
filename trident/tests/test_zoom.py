@@ -349,5 +349,85 @@ class NoPrepositionTest(unittest.TestCase):
             self.assertEqual(r["place"], "Hiroshima station", said)
 
 
+
+class FuzzyStationTest(unittest.TestCase):
+    """Recovering a station name that whisper mangled.
+
+    新宿, 池袋, 渋谷 and 上野 asked for in English on pi5-deck, 2026-08-27, came
+    back as "Shinjuku Station", "Ekebukro Station", "severe station" and
+    "whenostation". Only the first matched OSM's name:en exactly.
+
+    Measured against the 686 romanised station names within 20km of the map:
+
+        Ekebukro  -> Ikebukuro  0.222   next 0.462
+        wheno     -> Ueno       0.400   next 0.571
+        Shinjuku  -> Shinjuku   0.000
+        severe    -> best 0.667 (Meguro); 渋谷 not in the top three
+        sub       -> best 0.500 (Okubo)
+        scenic    -> best 0.600
+
+    Two clean groups with a gap between them, so the threshold sits at 0.45: it
+    recovers what is recoverable and refuses the rest, which is the outcome that
+    matters. A wrong station confidently flown to is worse than an apology --
+    the map leaves where it was, and nothing says it went astray.
+    """
+
+    # As Overpass returns them, near enough: the near-misses are what make the
+    # threshold meaningful.
+    NEARBY = ["Ikebukuro", "Kita-ikebukuro", "Meguro", "Mejiro", "Samezu",
+              "Ueno", "Ichinoe", "Ikenoue", "Okubo", "Ōkubo",
+              "Ōtsuka", "Suehirocho", "Shin-Kiba", "Shinjuku",
+              "Nishi-shinjuku", "Seibu-Shinjuku", "Inaricho", "Shibuya"]
+
+    def test_it_recovers_a_dropped_vowel(self):
+        got = Z.best_fuzzy("Ekebukro", self.NEARBY)
+        self.assertEqual(got, "Ikebukuro")
+
+    def test_it_recovers_a_name_glued_to_its_suffix(self):
+        """"whenostation" is one word; the suffix has to come off first."""
+        stem, kv = Z.split_suffix("whenostation")
+        self.assertEqual(kv, ("railway", "station"))
+        self.assertEqual(Z.best_fuzzy(stem, self.NEARBY), "Ueno")
+
+    def test_an_exact_name_is_unchanged(self):
+        self.assertEqual(Z.best_fuzzy("Shinjuku", self.NEARBY), "Shinjuku")
+
+    def test_it_refuses_what_it_cannot_recover(self):
+        """These were 渋谷 and are not close to anything. Guessing "Meguro" at
+        0.667 would fly the map to the wrong station and say nothing about it."""
+        for hopeless in ("severe", "scenic", "inter-equivocry"):
+            self.assertIsNone(Z.best_fuzzy(hopeless, self.NEARBY), hopeless)
+
+    def test_a_near_miss_on_the_wrong_side_of_the_line_is_refused(self):
+        """"sub" is 0.500 from Okubo. Half a name is not a name."""
+        self.assertIsNone(Z.best_fuzzy("sub", self.NEARBY))
+
+    def test_nothing_nearby_is_not_a_crash(self):
+        self.assertIsNone(Z.best_fuzzy("Ikebukuro", []))
+
+    def test_an_empty_name_matches_nothing(self):
+        """Otherwise every station in range is equally close to nothing."""
+        self.assertIsNone(Z.best_fuzzy("", self.NEARBY))
+
+
+class GluedSuffixTest(unittest.TestCase):
+    def test_a_suffix_with_no_space_still_splits(self):
+        self.assertEqual(Z.split_suffix("whenostation"),
+                         ("wheno", ("railway", "station")))
+
+    def test_the_spaced_form_is_preferred(self):
+        self.assertEqual(Z.split_suffix("Hiroshima station"),
+                         ("Hiroshima", ("railway", "station")))
+
+    def test_a_stem_too_short_to_be_a_name_is_not_split(self):
+        """"station" alone, and anything that leaves a fragment behind."""
+        self.assertIsNone(Z.split_suffix("station"))
+        self.assertIsNone(Z.split_suffix("astation"))
+
+    def test_an_ordinary_word_ending_in_the_letters_is_left_alone(self):
+        for word in ("Preston", "Newport", "Boston"):
+            self.assertIsNone(Z.split_suffix(word), word)
+
+
 if __name__ == "__main__":
     unittest.main()
