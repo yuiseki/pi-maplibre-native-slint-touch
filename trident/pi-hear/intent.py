@@ -61,6 +61,12 @@ SLOTS = ("place", "category", "lang")
 # rather than where the map is looking.
 FLAGS = ("here",)
 
+# Words a small model reaches for when it must fill "category" and has nothing
+# to put there. They are why an unknown category is emptied; they must not
+# become a generated query either, or Overpass is asked for a tag nobody wants.
+_NOT_A_CONCERN = {"city", "map", "place", "area", "location", "here", "none",
+                  "unknown", "poi", "thing", "things", "something"}
+
 PROMPT_HEAD = """Convert a spoken map command into JSON.
 
 "intent" is one of:
@@ -237,6 +243,10 @@ def _empty(intent_name="unknown"):
     out = {"intent": intent_name}
     for slot in SLOTS:
         out[slot] = ""
+    # What the model called it, when the table has no such word. Kept beside
+    # the emptied category rather than in it: pi-poi must never see a word it
+    # cannot map, and the third tier needs the word it could not map.
+    out["concern"] = ""
     for flag in FLAGS:
         out[flag] = False
     return out
@@ -278,6 +288,12 @@ def _coerce(doc):
         out["category"] = ""
     if out["category"] and _geo is not None:
         if _geo.canonical_category(out["category"]) is None:
+            # Not a category this deck can answer from its table. Keep the word
+            # for the query generator, unless it is one of the fillers the guard
+            # above exists for.
+            word = out["category"].strip()
+            if word.lower() not in _NOT_A_CONCERN and name == "show_poi":
+                out["concern"] = word
             out["category"] = ""
         else:
             out["category"] = _geo.canonical_category(out["category"])
@@ -880,11 +896,22 @@ def for_voice(transcript, lang=None):
     if result is None:
         answer = by_server(transcript, timeout=VOICE_TIMEOUT)
         result = parse(answer) if answer else None
+    return for_voice_result(result, from_rule=from_rule,
+                            transcript=transcript, lang=lang)
+
+
+def for_voice_result(result, from_rule=True, transcript="", lang=None):
+    """The plan for an already-parsed result, or None.
+
+    Split out so the routing can be tested without a model in the loop. Which
+    tier a sentence lands in is a decision worth pinning, and it is the half
+    that does not need a running llama-server to check.
+    """
     if result is None or result["intent"] == "unknown":
         return None
     name = result["intent"]
     if (name == "show_place" and not from_rule
-            and _LANG_ATTEMPT.search(transcript)):
+            and _LANG_ATTEMPT.search(transcript or "")):
         # The model's guess at a mangled "language mode ..." is a place name
         # every time, and acting on it throws the map across the world.
         return None
@@ -903,6 +930,20 @@ def for_voice(transcript, lang=None):
     if name == "show_here":
         return {"tool": "pi-here", "args": [], "timeout": 30,
                 "intent": result, "clear_pins": True}
+    if name == "show_poi" and not result["category"] and result.get("concern"):
+        # Third tier. The table has no word for what was asked, so the
+        # fine-tuned model writes the query instead. Last, because it is the
+        # slow one (2-4s of generation before the query even runs) and the only
+        # one that can be wrong about what it asked for.
+        #
+        # A place is required. pi-ql refuses an unbounded query and this deck's
+        # Overpass is the whole planet, so "bakeries" with nowhere to look is
+        # not a smaller question, it is every bakery on Earth.
+        if _is_a_name(result.get("place")):
+            return {"tool": "pi-ql",
+                    "args": [result["concern"]] + result["place"].split(),
+                    "timeout": 240, "intent": result, "clear_pins": True}
+        return None
     if name == "show_poi" and result["category"]:
         args = (["--here"] if result.get("here") else []) + [result["category"]]
         # A named place goes through as pi-poi's positional argument, which

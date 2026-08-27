@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""pi-ql : ask the small model for an Overpass query when the table runs out.
+
+pi-poi answers from geo.CATEGORIES, which on this deck is 20 English words.
+"bakeries" and "ramen" are not among them, so no amount of accurate intent
+parsing can express them -- measured on pi5-deck, both the stock 0.5B and the
+fine-tuned one return an empty category for "Find bakeries in Kyoto", because
+the category does not exist to return.
+
+The fine-tuned deep model writes the query instead. Asked in the shape it was
+trained on (AreaWithConcern), measured here against this deck's own Overpass:
+
+    Kyoto; Bakeries      nwr["shop"="bakery"]                             159
+    Taito; Cafes         nwr["amenity"="cafe"]                            368
+    Shinjuku; Ramen      nwr["amenity"="restaurant"]["cuisine"="ramen"]     69
+
+This is the third tier and runs last on purpose. It is the slow one (2-4s of
+generation on top of the query) and the only one that can be wrong about what
+it asked for.
+
+Environment:
+  PI_QL_LLAMA        llama-server base (default http://127.0.0.1:8080)
+  PI_QL_OVERPASS     Overpass base (default http://127.0.0.1:8002)
+  PI_QL_TIMEOUT      Overpass timeout to force into the query (default 60)
+  PI_QL_LIMIT        markers to keep (default 200)
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "pi-hear"))
+sys.path.append("/home/yuiseki/src/pi-hear")
+
+import geo  # noqa: E402
+
+# 8081, not 8080. Only the fine-tuned model writes Overpass QL; asked for a
+# query, the instruct model on 8080 echoes the question back verbatim --
+# which reads as "the model did not write a query" and looks like a bug in
+# the prompt rather than a wrong port.
+LLAMA = os.environ.get("PI_QL_LLAMA", "http://127.0.0.1:8081")
+OVERPASS = os.environ.get("PI_QL_OVERPASS", "http://127.0.0.1:8002")
+MARKERS = os.environ.get("PI_POI_MARKERS", "/dev/shm/pi-mesh-nodes")
+LAYERS = os.environ.get("PI_POI_LAYERS", "/dev/shm/pi-poi-layers.json")
+FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
+OV_TIMEOUT = int(os.environ.get("PI_QL_TIMEOUT", "60"))
+LIMIT = int(os.environ.get("PI_QL_LIMIT", "200"))
+
+# The layer these land in, so "clear the map" takes them off with the rest.
+LAYER = "ql"
+
+# The prompt the model was fine-tuned with. Not the few-shot one TRIDENT uses
+# by default: giving a 0.5B five examples and a tag table made it answer Cafes
+# with amenity=restaurant + cuisine=cafe, because the examples taught it a
+# shape ("X shops = amenity + cuisine=X") that does not apply.
+SYSTEM = (
+    "You are an expert at generating Overpass QL queries for OpenStreetMap. "
+    "Given a location and a point-of-interest type in TRIDENT AreaWithConcern "
+    "format, output only a valid Overpass QL query with no explanation.\n"
+    "In TRIDENT AreaWithConcern format, areas are listed from smallest to "
+    "largest: the first token is the innermost (most specific) area, and each "
+    "subsequent token is a larger containing area. Always use the first token "
+    "as the inner filter variable and the second token as the outer filter "
+    "variable.")
+
+
+def area_with_concern(place, concern):
+    """The one line the model was trained to answer, or None.
+
+    Both halves are required. Without an area the model writes a query with no
+    spatial filter, and on a planet database that asks for every bakery on
+    Earth -- see is_bounded.
+    """
+    place = (place or "").strip().strip(".,;")
+    concern = (concern or "").strip().strip(".,;")
+    if not place or not concern:
+        return None
+    return "AreaWithConcern: %s; %s" % (place, concern)
+
+
+def clean_query(raw):
+    """The query out of whatever the model wrapped it in, or None.
+
+    It usually answers bare, but a small model told to output "only a query"
+    still sometimes says "Here is the query:" or fences it.
+    """
+    text = (raw or "").replace("```overpassql", "").replace("```", "")
+    m = re.search(r"\[out:", text)
+    if not m:
+        return None
+    return text[m.start():].strip()
+
+
+def looks_like_overpass(q):
+    """Enough of a query to be worth sending."""
+    if not q or "[out:" not in q:
+        return False
+    if not re.search(r"\bout\b", q):
+        return False
+    return bool(re.search(r"\b(nwr|node|way|rel|relation)\s*\[", q))
+
+
+def is_bounded(q):
+    """Whether the query is confined to somewhere.
+
+    The database here is the whole planet. A query with no spatial constraint
+    is not a slow answer, it is an outage: it runs until the timeout while
+    holding one of the few dispatcher slots this deck has.
+
+    Accepted: an area filter (by id or by name), an around:, or a bbox.
+    """
+    if not q:
+        return False
+    if re.search(r"\(\s*area[.\w]*\s*\)", q) or re.search(r"\(area\.", q):
+        return True
+    if re.search(r"\(\s*around\s*:", q):
+        return True
+    # A bbox is four numbers inside the filter parens.
+    if re.search(r"\(\s*-?\d+\.?\d*\s*,\s*-?\d+\.?\d*\s*,"
+                 r"\s*-?\d+\.?\d*\s*,\s*-?\d+\.?\d*\s*\)", q):
+        return True
+    return False
+
+
+def cap_timeout(q, secs):
+    """Force the request timeout rather than trusting what was written.
+
+    The model writes timeout:30 because that is what its training data used.
+    Whether 30 is right depends on the instance, not on the query -- and on an
+    instance where it equals the whole time budget the dispatcher refuses it
+    as busy.
+    """
+    if re.search(r"\[timeout\s*:\s*\d+\]", q):
+        return re.sub(r"\[timeout\s*:\s*\d+\]", "[timeout:%d]" % secs, q, count=1)
+    return re.sub(r"(\[out:[^\]]*\])", r"\1[timeout:%d]" % secs, q, count=1)
+
+
+def ask_model(line, base=LLAMA, timeout=90, n_predict=160):
+    body = json.dumps({
+        "prompt": "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s"
+                  "<|im_end|>\n<|im_start|>assistant\n" % (SYSTEM, line),
+        "n_predict": n_predict,
+        "temperature": 0,
+        "cache_prompt": True,
+        "stop": ["<|im_end|>"],
+    }).encode()
+    req = urllib.request.Request(base.rstrip("/") + "/completion", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r).get("content", "")
+
+
+def ask_overpass(query, base=OVERPASS, timeout=120):
+    """The raw response text, not a parsed document.
+
+    geo.marker_lines does its own json.loads and is deliberately silent on
+    anything it cannot read. Handing it a dict makes json.loads raise TypeError,
+    which that silence swallows: 159 elements came back and nought markers were
+    drawn, with nothing said about it.
+    """
+    data = urllib.parse.urlencode({"data": query}).encode()
+    with urllib.request.urlopen(base.rstrip("/") + "/api/interpreter",
+                                data=data, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("concern", help="what to look for, e.g. 'Bakeries'")
+    ap.add_argument("place", nargs="+", help="where, e.g. Kyoto Japan")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the query the model wrote and stop")
+    ap.add_argument("--limit", type=int, default=LIMIT)
+    ap.add_argument("--max-zoom", type=int, default=14)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    line = area_with_concern(" ".join(args.place), args.concern)
+    if line is None:
+        print("pi-ql: need both a place and something to look for",
+              file=sys.stderr)
+        return 2
+
+    t0 = time.time()
+    try:
+        raw = ask_model(line)
+    except Exception as exc:                          # noqa: BLE001
+        print("pi-ql: the model did not answer: %s" % exc, file=sys.stderr)
+        return 1
+    gen = time.time() - t0
+
+    query = clean_query(raw)
+    if not query or not looks_like_overpass(query):
+        print("pi-ql: the model did not write a query: %r"
+              % (raw or "")[:120], file=sys.stderr)
+        return 1
+    if not is_bounded(query):
+        # Refuse rather than run. See is_bounded.
+        print("pi-ql: refusing a query with no area, around or bbox -- on a "
+              "planet database that asks for everything: %r" % query[:120],
+              file=sys.stderr)
+        return 1
+    query = cap_timeout(query, OV_TIMEOUT)
+
+    if args.dry_run:
+        print(query)
+        return 0
+
+    try:
+        body = ask_overpass(query)
+    except Exception as exc:                          # noqa: BLE001
+        print("pi-ql: overpass: %s" % exc, file=sys.stderr)
+        return 1
+
+    lines = geo.marker_lines(body, int(time.time()), limit=args.limit,
+                             slot=geo.colour_slot(LAYER))
+    geo.update_layer(LAYER, lines, markers=MARKERS, path=LAYERS)
+
+    fitted = ""
+    focus = geo.focus_of(lines)
+    if focus:
+        clat, clon, south, north, west, east = focus
+        zoom = geo.fit_zoom(south, north, west, east, max_zoom=args.max_zoom)
+        with open(FLYTO, "w") as fh:
+            fh.write("%.6f %.6f %d\n" % (clat, clon, zoom))
+        fitted = ", fit z%d" % zoom
+
+    n = len(lines.splitlines()) if lines else 0
+    tag = re.search(r'(nwr|node|way|rel)\s*\[[^\]]*\]', query)
+    # Nothing found is a failure here, unlike in pi-poi where the category came
+    # from a table and an empty answer really does mean "none nearby". The tag
+    # was generated, and a wrong one is indistinguishable from an empty area:
+    # measured, Bookshops in Kyoto gave shop~book (69) once and shop=bookshop
+    # (0) the next time, where OSM uses shop=books.
+    #
+    # By voice this matters more than the exit code suggests. The deck has
+    # already said "OK, showing bookshops"; without a non-zero exit it then
+    # goes silent, which is the failure mode the spoken apology exists for.
+    EMPTY_IS_FAILURE = True
+    if args.json:
+        print(json.dumps({"concern": args.concern, "place": " ".join(args.place),
+                          "count": n, "generated_s": round(gen, 2),
+                          "tag": tag.group(0) if tag else "",
+                          "query": query}))
+    else:
+        print("%d %s in %s (%s, model %.1fs%s)"
+              % (n, args.concern, " ".join(args.place),
+                 tag.group(0) if tag else "?", gen, fitted))
+    if n == 0 and EMPTY_IS_FAILURE:
+        print("pi-ql: %s in %s found nothing -- the generated tag may be wrong"
+              % (args.concern, " ".join(args.place)), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
