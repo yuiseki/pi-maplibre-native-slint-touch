@@ -165,10 +165,16 @@ def query_tags(q):
     name is not a classifier anyway.
     """
     out = []
-    for m in re.finditer(r'(area\s*)?\["([^"\]]+)"\s*=\s*"([^"]*)"\]', q or ""):
+    for m in re.finditer(
+            r'(area\s*)?\["([^"\]]+)"\s*(=|~)\s*"([^"]*)"\]', q or ""):
         if m.group(1):
             continue
-        key, value = m.group(2), m.group(3)
+        key, value = m.group(2), m.group(4)
+        if m.group(3) == "~":
+            # Marked, not skipped. A pattern is checkable -- does any real tag
+            # under this key match it -- and it is where the wrong answers came
+            # from: shop~pan matches nothing in OSM at all.
+            value = "~" + value
         if any(key == k or key.startswith(k) for k in _NOT_CLASSIFIERS):
             continue
         if not value:
@@ -196,6 +202,20 @@ def unknown_tags(pairs, db=None):
     try:
         bad = []
         for key, value in pairs:
+            if value.startswith("~"):
+                # Does any value under this key match the pattern? One real tag
+                # is enough: the query will find whatever matches.
+                pat = value[1:]
+                try:
+                    rx = re.compile(pat)
+                except re.error:
+                    bad.append((key, value))
+                    continue
+                rows = conn.execute(
+                    "select value from tags where key=?", (key,)).fetchall()
+                if not any(rx.search(v) for (v,) in rows):
+                    bad.append((key, value))
+                continue
             row = conn.execute(
                 "select count_all from tags where key=? and value=?",
                 (key, value)).fetchone()

@@ -516,12 +516,18 @@ def main():
         # mis-hearings (札幌/サッポロ, 沖縄/お気な, トライデント/トライ弦) by reading.
         matched, score, _r = romaji_match.wake_match(text)
         # The place table holds nine cities and matches them anywhere in the
-        # sentence, which is right for "show Hiroshima" and wrong for
-        # 「広島駅にズームして」-- it finds 広島 and flies to the city, discarding
-        # the half of the sentence that said which station. A sentence that
-        # names something to zoom to goes to the intent rules whole.
-        place = (None if intent_mod.is_zoom_request(text)
-                 else romaji_match.find_place(text))
+        # sentence, which is right for "show Hiroshima" and wrong for anything
+        # that also names a thing: 「広島駅にズームして」 finds 広島 and flies to
+        # the city, discarding the half that said which station.
+        #
+        # The same hole was open for POI searches and was wider than it looked.
+        # 「京都のパン屋を表示して」 went to flyto kyoto, and so did `Show cafes
+        # in Kyoto.` -- so a POI search naming a place had never reached pi-poi
+        # by voice at all. The routing tests passed because they called
+        # for_voice directly, which is not the path an utterance takes.
+        stands_aside = (intent_mod.is_zoom_request(text)
+                        or intent_mod.names_a_thing(text))
+        place = None if stands_aside else romaji_match.find_place(text)
         armed = time.time() < armed_until[0]
 
         if matched and place:                 # wake + place in one breath

@@ -294,6 +294,7 @@ def _coerce(doc):
             word = out["category"].strip()
             if word.lower() not in _NOT_A_CONCERN and name == "show_poi":
                 out["concern"] = word
+                out["place"] = place_without_concern(out["place"], word)
             out["category"] = ""
         else:
             out["category"] = _geo.canonical_category(out["category"])
@@ -558,6 +559,64 @@ def _find_category(text):
 # 「もっとズーム」, "zoom in". Those are about the current view, which is a
 # different request and not one that exists yet.
 _ZOOM_BARE = re.compile(r"^(?:もっと|少し|ちょっと|in|out|も)?$", re.I)
+
+
+# A thing to show, named alongside a place. Structure rather than vocabulary,
+# because the whole reason the third tier exists is that the vocabulary does not
+# have the word: パン屋 and bookshops are exactly what must be recognised here.
+#
+# Japanese: something between の and を, then a show verb. 「京都のパン屋を表示
+# して」 matches; 「京都を表示して」 has no の and does not.
+_THING_JA = re.compile(r"の[^をはがにへ、。\s]{1,14}を\s*(?:表示|見せ|出し|探し|さがし)")
+# English: a noun between the verb and "in <place>". "Show cafes in Kyoto"
+# matches; "Show Kyoto" has nothing between them.
+_THING_EN = re.compile(
+    r"\b(?:show|find|display|search|look\s+for)\s+(?:me\s+)?"
+    r"([a-z][a-z' -]{1,30}?)\s+(?:in|near|around|at)\b", re.I)
+
+
+def names_a_thing(text):
+    """True when the sentence names something to show, not just a place.
+
+    The nine-city table matches a city anywhere in a sentence. That is right
+    for "show Hiroshima" and wrong for 「京都のパン屋を表示して」, where it
+    finds 京都, flies there, and discards the half that said パン屋.
+
+    Traced on pi5-deck 2026-08-27: both 「京都のパン屋を表示して」 and
+    `Show cafes in Kyoto.` went to flyto, which means a POI search naming a
+    place had never reached pi-poi by voice at all.
+    """
+    t = str(text or "")
+    if _THING_JA.search(t):
+        return True
+    m = _THING_EN.search(t)
+    if m:
+        word = m.group(1).strip()
+        # "show me in Kyoto" and the like name no thing.
+        return word.lower() not in ("me", "us", "it", "that", "this", "them")
+    return False
+
+
+def place_without_concern(place, concern):
+    """The place with the thing taken out of it, if the model put it there.
+
+    Measured on pi5-deck: 「京都のパン屋を表示して」 comes back with
+    place='京都のパン屋' and category='パン'. Sent on as-is the geocoder looks
+    up 京都のパン屋 and finds nothing.
+
+    Only splits when the tail after the last の actually is the concern, so a
+    place that simply contains の keeps it: 「四条河原町の交差点」 is one name.
+    """
+    place = (place or "").strip()
+    concern = (concern or "").strip()
+    if not place or not concern or "の" not in place:
+        return place
+    head, _, tail = place.rpartition("の")
+    if not head:
+        return place
+    if concern in tail or tail in concern:
+        return head
+    return place
 
 
 def is_zoom_request(text):
@@ -893,6 +952,15 @@ def for_voice(transcript, lang=None):
     """
     result = by_rule(transcript, lang=lang)
     from_rule = result is not None
+    if (result is not None and result["intent"] == "show_place"
+            and names_a_thing(transcript)):
+        # The rules read 「京都のパン屋を表示して」 as a place called 京都のパン屋
+        # and would fly the geocoder at it. They cannot do better: the thing
+        # being asked for is precisely a word the vocabulary does not have.
+        # Hand the sentence to the model, which does return パン屋 as the
+        # category even when nothing downstream can map it.
+        result = None
+        from_rule = False
     if result is None:
         answer = by_server(transcript, timeout=VOICE_TIMEOUT)
         result = parse(answer) if answer else None

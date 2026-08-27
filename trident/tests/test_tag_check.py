@@ -59,12 +59,13 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(sorted(Q.query_tags(q)),
                          [("amenity", "cafe"), ("shop", "bakery")])
 
-    def test_a_regex_match_is_not_a_tag(self):
-        """`shop~book` is a pattern, not a key=value that can be looked up.
-        Measured: the same question produced shop~book once and shop=bookshop
-        the next time, and only the second is checkable."""
+    def test_a_regex_match_is_marked_not_dropped(self):
+        """This test said the opposite an hour ago, and the earlier judgement
+        was wrong. Patterns are checkable -- does any real tag under this key
+        match -- and skipping them let through every wrong answer measured for
+        a Japanese request. See RegexTest."""
         q = '[out:json];area(1)->.a;(nwr["shop"~"book"](area.a););out geom;'
-        self.assertEqual(Q.query_tags(q), [])
+        self.assertEqual(Q.query_tags(q), [("shop", "~book")])
 
     def test_descriptive_keys_are_not_classifiers(self):
         """text2geoql skips these for the same reason: they say what a thing is
@@ -101,6 +102,42 @@ class CheckTest(unittest.TestCase):
         check costs the old behaviour; refusing everything costs the feature."""
         self.assertEqual(Q.unknown_tags([("shop", "bookshop")],
                                         "/nonexistent/tags.db"), [])
+
+
+
+class RegexTest(unittest.TestCase):
+    """A regex filter can be checked too, and it is where the wrong answers are.
+
+    An earlier version skipped them, on the grounds that `shop~book` was the
+    form that worked (69 results) where the exact `shop=bookshop` failed. True,
+    but incomplete: measured on pi5-deck, every wrong answer for a Japanese
+    request was a regex.
+
+        パン屋 in 広島市   -> shop~pan            0 results
+        Bakeries in 広島市 -> shop~baker          works, but sloppy
+        パン in 京都       -> amenity~restaurant  200 restaurants
+
+    The table answers the first one: no shop value contains "pan" at all. It
+    cannot answer the third -- amenity=restaurant is real, it is simply not
+    what パン means. That is the model's limit, not a tag problem, and
+    pretending a tag check catches it would be worse than saying so.
+    """
+
+    def setUp(self):
+        self.db = a_table()
+
+    def test_a_regex_matching_a_real_tag_passes(self):
+        self.assertEqual(Q.unknown_tags([("shop", "~bake")], self.db), [])
+
+    def test_a_regex_matching_nothing_is_refused(self):
+        self.assertEqual(Q.unknown_tags([("shop", "~pan")], self.db),
+                         [("shop", "~pan")])
+
+    def test_the_marker_survives_extraction(self):
+        """query_tags has to say which were patterns, or the check cannot tell
+        an exact lookup from a search."""
+        q = '[out:json];area(1)->.a;(nwr["shop"~"book"](area.a););out geom;'
+        self.assertEqual(Q.query_tags(q), [("shop", "~book")])
 
 
 if __name__ == "__main__":
