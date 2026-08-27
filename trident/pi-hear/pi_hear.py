@@ -419,8 +419,15 @@ def main():
             # it is going.
             subprocess.run(["/usr/local/bin/pi-poi", "clear"],
                            capture_output=True, timeout=20)
-        if what["intent"] == "show_place":
-            say_muted("承知しました。" if lang == "ja" else "Understood.")
+        if not plan.get("speak_first"):
+            # Everything that moves the map says so first. Only show_place did
+            # before, so a zoom or a POI search sat silent through several
+            # seconds of Overpass -- long enough to wonder whether the deck had
+            # heard. Said before the tool runs, not after, because the wait is
+            # the part that needs filling. speak_first plans are excluded: they
+            # have already said their piece and are about to restart this
+            # process.
+            say_muted(intent_mod.ack_reply(what, lang, said=text))
         failed = False
         try:
             r = subprocess.run(["/usr/local/bin/" + plan["tool"]] + plan["args"],

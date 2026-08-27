@@ -116,6 +116,81 @@ def build_prompt(transcript):
 # What the deck says as it switches -- in the language it is switching *to*,
 # not the one being left. The last thing heard should match what it is about to
 # expect, or the person answers in the wrong language.
+_ACK = {"ja": "承知しました。%sを表示します。", "en": "OK, showing %s."}
+_ACK_BARE = {"ja": "承知しました。", "en": "Understood."}
+_HERE_WORD = {"ja": "現在地", "en": "here"}
+
+
+def _spoken_category(category, said, lang):
+    """The word the speaker used for this category, if it can be found.
+
+    Preferred over the normalised category for two reasons at once. "cafe" is
+    what the map searches for, but "Show cafes" answered with "showing cafe"
+    sounds broken, and pluralising by rule produces "parkings" and "fuels". And
+    a Japanese request normalises to the English key, so echoing the category
+    would put "cafe" in the middle of a Japanese sentence.
+
+    Saying back what was said solves both without a table of spoken forms.
+    """
+    try:
+        import geo
+    except ImportError:
+        return None
+    for token in re.split(r"[\s、。,.!?！？]+", said or ""):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            if geo.normalise_category(token) == category:
+                return token
+        except Exception:                             # noqa: BLE001
+            continue
+    # Nothing matched -- fall back to a synonym in the reply language, so a
+    # Japanese sentence at least stays Japanese.
+    try:
+        tag = geo.CATEGORIES.get(category)
+        if tag:
+            for word, other in geo.CATEGORIES.items():
+                if other == tag and word.isascii() == (lang != "ja"):
+                    return word
+    except Exception:                                 # noqa: BLE001
+        pass
+    return None
+
+
+def ack_reply(result, lang, said=None):
+    """What to say before running the tool, naming the thing when there is one.
+
+    The map used to move in silence for everything except show_place. Overpass
+    takes seconds, so the gap between asking and anything happening was long
+    enough to wonder whether the deck had heard -- and the only other sound it
+    makes is the apology when nothing was found, leaving silence to mean both
+    "working on it" and "it worked".
+    """
+    lang = lang if lang in _ACK else "ja"
+    name = (result or {}).get("intent")
+    what = None
+    if name == "show_poi" and (result or {}).get("category"):
+        # Checked before "here", because "hotels near here" is a hotel search.
+        # Letting the flag win named a different command than the one about to
+        # run, which is worse than the silence this replaced.
+        what = _spoken_category(result["category"], said, lang)
+        place = (result.get("place") or "").strip()
+        if what and place:
+            what = ("%sの%s" % (place, what) if lang == "ja"
+                    else "%s in %s" % (what, place))
+        elif what and result.get("here"):
+            what = ("この辺の%s" % what if lang == "ja"
+                    else "%s nearby" % what)
+    elif name == "show_here" or (result or {}).get("here"):
+        what = _HERE_WORD[lang]
+    elif name in ("zoom_to", "show_place"):
+        what = (result.get("place") or "").strip() or None
+    if not what:
+        return _ACK_BARE[lang]
+    return _ACK[lang] % what
+
+
 _FAILURE_REPLY = {"ja": "すみません、もう一度お願いします。",
                   "en": "Sorry, could you please try again?"}
 
