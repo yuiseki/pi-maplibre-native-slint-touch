@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+import sqlite3
 import urllib.parse
 import urllib.request
 
@@ -50,6 +51,18 @@ LAYERS = os.environ.get("PI_POI_LAYERS", "/dev/shm/pi-poi-layers.json")
 FLYTO = os.environ.get("PI_MAP_FLYTO", "/dev/shm/pi-map-flyto")
 OV_TIMEOUT = int(os.environ.get("PI_QL_TIMEOUT", "60"))
 LIMIT = int(os.environ.get("PI_QL_LIMIT", "200"))
+
+# A 7.8 MB table of the 124,570 tags used at least 1,000 times, built by
+# pi-tags-build from a full Taginfo database. On the SD card rather than the
+# SSD so the check survives the SSD being unplugged.
+TAGS_DB = os.environ.get("PI_QL_TAGS",
+                         os.path.expanduser("~/.local/share/pi-ql/tags.db"))
+
+# Keys that say what a thing is called, not what kind of thing it is. Their
+# values are unbounded, so "not in the table" means nothing about them.
+# text2geoql-dataset skips the same set when validating training pairs.
+_NOT_CLASSIFIERS = ("name", "addr:", "ref", "contact:", "phone", "website",
+                    "operator", "brand", "description", "note")
 
 # The layer these land in, so "clear the map" takes them off with the rest.
 LAYER = "ql"
@@ -140,6 +153,61 @@ def cap_timeout(q, secs):
     return re.sub(r"(\[out:[^\]]*\])", r"\1[timeout:%d]" % secs, q, count=1)
 
 
+def query_tags(q):
+    """The [key=value] pairs in a query that are worth checking.
+
+    Only exact matches. A regex filter (`["shop"~"book"]`) is a pattern rather
+    than a tag and has nothing to look up -- which matters, because the same
+    question produced shop~book (69 results) once and shop=bookshop (0) the
+    next time, and only the second is checkable.
+
+    Area filters are skipped: `area["name:en"="Kyoto"]` names a boundary, and
+    name is not a classifier anyway.
+    """
+    out = []
+    for m in re.finditer(r'(area\s*)?\["([^"\]]+)"\s*=\s*"([^"]*)"\]', q or ""):
+        if m.group(1):
+            continue
+        key, value = m.group(2), m.group(3)
+        if any(key == k or key.startswith(k) for k in _NOT_CLASSIFIERS):
+            continue
+        if not value:
+            continue
+        pair = (key, value)
+        if pair not in out:
+            out.append(pair)
+    return out
+
+
+def unknown_tags(pairs, db=None):
+    """Those pairs that OSM does not actually use, as far as the table knows.
+
+    An absent table means no check, not a refusal. The deck has to keep working
+    without it: losing the check costs what the behaviour was yesterday, while
+    refusing everything would cost the feature.
+    """
+    path = TAGS_DB if db is None else db
+    if not pairs or not os.path.exists(path):
+        return []
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        bad = []
+        for key, value in pairs:
+            row = conn.execute(
+                "select count_all from tags where key=? and value=?",
+                (key, value)).fetchone()
+            if not row:
+                bad.append((key, value))
+        return bad
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
 def ask_model(line, base=LLAMA, timeout=90, n_predict=160):
     body = json.dumps({
         "prompt": "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s"
@@ -180,6 +248,8 @@ def build_parser():
                     help="print the query the model wrote and stop")
     ap.add_argument("--limit", type=int, default=LIMIT)
     ap.add_argument("--max-zoom", type=int, default=14)
+    ap.add_argument("--no-tag-check", action="store_true",
+                    help="ask Overpass even for a tag the table does not know")
     return ap
 
 
@@ -211,6 +281,16 @@ def main(argv=None):
               file=sys.stderr)
         return 1
     query = cap_timeout(query, OV_TIMEOUT)
+
+    # Before Overpass, not after. A tag OSM does not use comes back as an empty
+    # area, which is indistinguishable from a real one -- and on a planet
+    # instance the trip is not free. Measured: shop=bookshop, shop=baker and
+    # amenity=coffee_shop all reached Overpass and all returned nothing.
+    bad = unknown_tags(query_tags(query))
+    if bad and not args.no_tag_check:
+        print("pi-ql: %s is not a tag OSM uses; not asking Overpass"
+              % ", ".join("%s=%s" % kv for kv in bad), file=sys.stderr)
+        return 1
 
     if args.dry_run:
         print(query)

@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""pi-tags-build : a deck-sized tag table out of a full Taginfo database.
+
+Runs on the machine that has Taginfo, not on the deck. The full
+`taginfo-db.db` is 12.5 GB, almost all of it the `tags` table at 186,835,621
+rows. Validation needs three columns of it and only the rows that clear the
+threshold, which at count_all >= 1000 is 124,570 rows and 7.8 MB -- small
+enough for the deck's SD card, so it works with the SSD unplugged.
+
+Why 1000: `text2geoql-dataset/src/taginfo.py` validates training pairs with
+`min_count=1000`. Matching it means inference and training agree about what a
+real tag is. Lowering it does not recover anything that matters -- the tags
+that went wrong in practice (shop=bookshop, shop=baker, amenity=coffee_shop)
+have no rows at all -- it only widens the door for rare tags, which is the same
+door a wrong tag comes through.
+
+    pi-tags-build --taginfo .../taginfo-db.db --out tags-1000.db
+"""
+import argparse
+import os
+import sqlite3
+import sys
+import time
+
+
+def build(taginfo, out, min_count):
+    if os.path.exists(out):
+        os.remove(out)
+    src = sqlite3.connect("file:%s?mode=ro" % taginfo, uri=True)
+    dst = sqlite3.connect(out)
+    dst.execute("create table tags (key text, value text, count_all integer)")
+    rows = src.execute(
+        "select key, value, count_all from tags where count_all >= ?",
+        (min_count,))
+    dst.executemany("insert into tags values (?,?,?)", rows)
+    # Unique, because the lookup is by the pair and a duplicate would mean the
+    # source is not what this assumes.
+    dst.execute("create unique index tags_kv on tags(key, value)")
+    dst.execute("create table meta (name text, value text)")
+    dst.executemany("insert into meta values (?,?)", [
+        ("min_count", str(min_count)),
+        ("built", time.strftime("%Y-%m-%dT%H:%M:%S%z")),
+        ("source", os.path.abspath(taginfo)),
+    ])
+    dst.commit()
+    n = dst.execute("select count(*) from tags").fetchone()[0]
+    dst.close()
+    src.close()
+    return n
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--taginfo", required=True, help="path to taginfo-db.db")
+    ap.add_argument("--out", required=True, help="where to write the table")
+    ap.add_argument("--min-count", type=int, default=1000,
+                    help="keep tags used at least this often (default 1000, "
+                         "matching text2geoql-dataset's validate_tag)")
+    args = ap.parse_args(argv)
+
+    if not os.path.exists(args.taginfo):
+        print("pi-tags-build: no such file: %s" % args.taginfo, file=sys.stderr)
+        return 1
+    t0 = time.time()
+    n = build(args.taginfo, args.out, args.min_count)
+    print("%s: %d tags at count_all >= %d, %.1f MB, %.0fs"
+          % (args.out, n, args.min_count,
+             os.path.getsize(args.out) / 1048576.0, time.time() - t0))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
