@@ -228,6 +228,31 @@ def unknown_tags(pairs, db=None):
         conn.close()
 
 
+# Only inside an area filter. A name on the features themselves is a different
+# question -- ["name"="Doutor"] asks for a shop by that name -- and must survive.
+_AREA_NAME = re.compile(r'(area\s*\[\s*")(name(?::en)?)("\s*=\s*"[^"]*"\s*\])')
+
+
+def swap_area_key(query):
+    """The query with area name filters moved to the other key, or None.
+
+    The model writes name:en because its training data is English, and given a
+    Japanese place it puts the Japanese string there, where nothing matches.
+    Measured on this deck, counting cafes: 京都市 gives 842 under name and 0
+    under name:en; Kyoto gives 0 and 842. One key or the other, never both.
+
+    None when there is nothing to swap -- an area id, or a bbox.
+    """
+    if not query or not _AREA_NAME.search(query):
+        return None
+
+    def flip(m):
+        key = "name" if m.group(2) == "name:en" else "name:en"
+        return m.group(1) + key + m.group(3)
+
+    return _AREA_NAME.sub(flip, query)
+
+
 def ask_model(line, base=LLAMA, timeout=90, n_predict=160):
     body = json.dumps({
         "prompt": "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s"
@@ -324,6 +349,22 @@ def main(argv=None):
 
     lines = geo.marker_lines(body, int(time.time()), limit=args.limit,
                              slot=geo.colour_slot(LAYER))
+    swapped = ""
+    if not lines:
+        # Nothing found, and an area name filter is the likeliest reason. One
+        # retry with the other key; see swap_area_key. Only on empty, so a
+        # query that worked costs nothing.
+        other = swap_area_key(query)
+        if other:
+            try:
+                body = ask_overpass(other)
+            except Exception as exc:                  # noqa: BLE001
+                print("pi-ql: overpass (retry): %s" % exc, file=sys.stderr)
+                body = ""
+            retry = geo.marker_lines(body, int(time.time()), limit=args.limit,
+                                     slot=geo.colour_slot(LAYER))
+            if retry:
+                lines, query, swapped = retry, other, ", name key swapped"
     geo.update_layer(LAYER, lines, markers=MARKERS, path=LAYERS)
 
     fitted = ""
@@ -353,9 +394,9 @@ def main(argv=None):
                           "tag": tag.group(0) if tag else "",
                           "query": query}))
     else:
-        print("%d %s in %s (%s, model %.1fs%s)"
+        print("%d %s in %s (%s, model %.1fs%s%s)"
               % (n, args.concern, " ".join(args.place),
-                 tag.group(0) if tag else "?", gen, fitted))
+                 tag.group(0) if tag else "?", gen, fitted, swapped))
     if n == 0 and EMPTY_IS_FAILURE:
         print("pi-ql: %s in %s found nothing -- the generated tag may be wrong"
               % (args.concern, " ".join(args.place)), file=sys.stderr)
