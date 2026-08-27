@@ -34,6 +34,7 @@
 #include "gl_map_window.h"
 #include "slint_map_gl.hpp"
 #include "style_list.hpp"
+#include "voice_activity.hpp"
 
 // DVD logo dimensions (display + alpha-mask size).
 // DVD logo dimensions (display + alpha-mask size).
@@ -968,7 +969,7 @@ int main(int /*argc*/, char** /*argv*/) {
         const char* ifenv = std::getenv("MAPLIBRE_NET_IFACE");
         std::string iface_override = ifenv ? ifenv : "";
         std::thread([ns, iface_override, net_ssid, net_ssid_mtx, kbd_conn,
-                     mic_present, mic_state]() {
+                     mic_present, mic_state, last_activity]() {
             while (true) {
                 // Default-route interface from /proc/net/route (the line whose
                 // hex Destination is 00000000).
@@ -1124,6 +1125,18 @@ int main(int /*argc*/, char** /*argv*/) {
                                 mstate = 2;
                             else if (word == "asr" || word == "muted")
                                 mstate = 1;
+                            // Talking to the map counts as using it. The idle
+                            // clock is otherwise touch-only, which left the
+                            // saver free to arrive mid-sentence -- and pi-hear
+                            // pauses itself once it does, so the deck stops
+                            // listening exactly when it is being spoken to.
+                            //
+                            // This defers; it does not wake. Waking a black
+                            // screen on a noise is the thing the touch-only
+                            // rule was protecting against, and nothing here is
+                            // reachable without the wake word having matched.
+                            if (maplibre_slint::voice_is_active(word))
+                                last_activity->store(now_ms());
                         }
                     }
                 }

@@ -19,6 +19,7 @@ if(MLN_WITH_OPENGL AND NOT APPLE AND NOT WIN32)
         src/slint_map_gl.cpp
         src/slint_gl_backend.cpp
         src/style_list.cpp
+        src/voice_activity.cpp
         platform/custom_file_source.cpp
     )
 

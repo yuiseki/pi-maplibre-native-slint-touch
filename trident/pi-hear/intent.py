@@ -116,99 +116,6 @@ def build_prompt(transcript):
 # What the deck says as it switches -- in the language it is switching *to*,
 # not the one being left. The last thing heard should match what it is about to
 # expect, or the person answers in the wrong language.
-_ACK = {"ja": "承知しました。%sを表示します。", "en": "OK, showing %s."}
-_ACK_BARE = {"ja": "承知しました。", "en": "Understood."}
-_HERE_WORD = {"ja": "現在地", "en": "here"}
-
-
-def _spoken_category(category, said, lang):
-    """The word the speaker used for this category, if it can be found.
-
-    Preferred over the normalised category for two reasons at once. "cafe" is
-    what the map searches for, but "Show cafes" answered with "showing cafe"
-    sounds broken, and pluralising by rule produces "parkings" and "fuels". And
-    a Japanese request normalises to the English key, so echoing the category
-    would put "cafe" in the middle of a Japanese sentence.
-
-    Saying back what was said solves both without a table of spoken forms.
-    """
-    try:
-        import geo
-    except ImportError:
-        return None
-    for token in re.split(r"[\s、。,.!?！？]+", said or ""):
-        token = token.strip()
-        if not token:
-            continue
-        try:
-            if geo.normalise_category(token) == category:
-                return token
-        except Exception:                             # noqa: BLE001
-            continue
-    # Nothing matched -- fall back to a synonym in the reply language, so a
-    # Japanese sentence at least stays Japanese.
-    try:
-        tag = geo.CATEGORIES.get(category)
-        if tag:
-            for word, other in geo.CATEGORIES.items():
-                if other == tag and word.isascii() == (lang != "ja"):
-                    return word
-    except Exception:                                 # noqa: BLE001
-        pass
-    return None
-
-
-def ack_reply(result, lang, said=None):
-    """What to say before running the tool, naming the thing when there is one.
-
-    The map used to move in silence for everything except show_place. Overpass
-    takes seconds, so the gap between asking and anything happening was long
-    enough to wonder whether the deck had heard -- and the only other sound it
-    makes is the apology when nothing was found, leaving silence to mean both
-    "working on it" and "it worked".
-    """
-    lang = lang if lang in _ACK else "ja"
-    name = (result or {}).get("intent")
-    what = None
-    if name == "show_poi" and (result or {}).get("category"):
-        # Checked before "here", because "hotels near here" is a hotel search.
-        # Letting the flag win named a different command than the one about to
-        # run, which is worse than the silence this replaced.
-        what = _spoken_category(result["category"], said, lang)
-        place = (result.get("place") or "").strip()
-        if what and place:
-            what = ("%sの%s" % (place, what) if lang == "ja"
-                    else "%s in %s" % (what, place))
-        elif what and result.get("here"):
-            what = ("この辺の%s" % what if lang == "ja"
-                    else "%s nearby" % what)
-    elif name == "show_here" or (result or {}).get("here"):
-        what = _HERE_WORD[lang]
-    elif name in ("zoom_to", "show_place"):
-        what = (result.get("place") or "").strip() or None
-    if not what:
-        return _ACK_BARE[lang]
-    return _ACK[lang] % what
-
-
-_FAILURE_REPLY = {"ja": "すみません、もう一度お願いします。",
-                  "en": "Sorry, could you please try again?"}
-
-
-def failure_reply(lang):
-    """What to say when the tool ran and found nothing.
-
-    Whiffing silently is the worst outcome available. A success moves the map
-    and a misparse moves it somewhere wrong, but a tool that exits 1 leaves the
-    deck looking exactly as it does while still thinking, and the speaker cannot
-    tell whether to wait, repeat, or rephrase.
-
-    It does not read back what was misheard. "whenostation" is not a word
-    anybody said, and quoting it suggests they did.
-    """
-    return _FAILURE_REPLY.get(lang or "", _FAILURE_REPLY["ja"])
-
-
 _LANG_REPLY = {"ja": "日本語モードにします。", "en": "Switching to English."}
 
 
@@ -353,30 +260,6 @@ _LANG_JA = re.compile(
     r"(?:言語|げんご|ゲンゴ)\s*モード"          # the phrase, however it is written
     r"|(英語|エイゴ|日本語|ニホンゴ)\s*モード")   # ...or just "<language> mode"
 _LANG_JA_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ)")
-_MODE_WORD = re.compile(r"モード|\bmode\b", re.I)
-_LANG_ANY_NAME = re.compile(r"(英語|エイゴ|日本語|ニホンゴ|japanese|english|nihongo)",
-                            re.I)
-
-
-def _looks_like_language_switch(text):
-    """モード plus a language name, in either order.
-
-    The stem is the unreliable half. Two real transcripts of "言語モード 英語"
-    on 2026-08-27 both came back as 銀河モード 英語: げんご and ぎんが are not
-    close as sounds, but 銀河 is the commoner word and whisper-base reached for
-    it. 元号 and 原稿 are the same accident waiting to happen, so listing them
-    one at a time only ever catches the mishearing that already bit.
-
-    The language name survives, so that is what this keys on. モード is still
-    required, or "an English pub" would change the language mid-sentence.
-
-    English names count too, because the way out of English is spoken in
-    English and its stem is no sturdier: the note on _LANG_ATTEMPT records the
-    map flying to "Rangage" and "Languise". Without this the deck can be talked
-    into a language it cannot be talked out of.
-    """
-    return bool(_MODE_WORD.search(text) and _LANG_ANY_NAME.search(text))
-
 
 _LANG_NAMES = {"japanese": "ja", "nihongo": "ja", "日本語": "ja",
                "ニホンゴ": "ja", "english": "en", "英語": "en", "エイゴ": "en"}
@@ -490,18 +373,8 @@ _NAMED_FEATURE_JA = re.compile(
     r"(?:駅|空港|港|城|大学|病院|公園|神社|寺|会議場|美術館|博物館|球場|"
     r"タワー|ドーム|スタジアム))"
     r"\s*(?:を|に|へ)?\s*(?:表示|ひょうじ|見せ|行き|いき|移動)")
-# The preposition is optional because whisper drops it. Real transcripts of the
-# same spoken sentence, a minute apart on 2026-08-27: "Zoom into International
-# Conference Center Hiroshima" and "Zoom International Conference Center
-# Hiroshima". An unstressed "in to" between two stressed words is exactly what
-# a small model loses.
-#
-# Safe to relax because the captured name still has to survive _ZOOM_BARE, which
-# rejects "in" and "out" -- so "zoom out" does not become a request to fly to
-# somewhere called Out.
 _ZOOM_EN = re.compile(
-    r"\bzoom\s+(?:in\s+)?(?:(?:to|on|into|at)\s+)?(?:the\s+)?(.+?)"
-    r"\s*[.!?]?\s*$",
+    r"\bzoom\s+(?:in\s+)?(?:to|on|into|at)\s+(?:the\s+)?(.+?)\s*[.!?]?\s*$",
     re.I)
 
 _PLACE_OF = re.compile(
@@ -626,14 +499,13 @@ def by_rule(transcript, lang=None):
             out = _empty("set_language")
             out["lang"] = lang
             return out
-    if (_LANG_JA.search(text) or _LANG_EN_BARE.search(text)
-            or _looks_like_language_switch(text)):
+    if _LANG_JA.search(text) or _LANG_EN_BARE.search(text):
         # The phrase and the language name arrive as separate fragments often
         # enough (ゲンゴモード + 英語) that they are matched separately. A
         # readable name wins; without one, fall back to "the other language",
         # which is the only thing the request can mean.
-        n = _LANG_ANY_NAME.search(text)
-        want = _LANG_NAMES.get(n.group(1).lower()) if n else _other_language(lang)
+        n = _LANG_JA_NAME.search(text)
+        want = _LANG_NAMES.get(n.group(1)) if n else _other_language(lang)
         if want:
             out = _empty("set_language")
             out["lang"] = want
