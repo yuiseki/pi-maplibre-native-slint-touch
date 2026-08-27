@@ -421,12 +421,20 @@ def main():
                            capture_output=True, timeout=20)
         if what["intent"] == "show_place":
             say_muted("承知しました。" if lang == "ja" else "Understood.")
+        failed = False
         try:
-            subprocess.run(["/usr/local/bin/" + plan["tool"]] + plan["args"],
-                           timeout=plan["timeout"])
+            r = subprocess.run(["/usr/local/bin/" + plan["tool"]] + plan["args"],
+                               timeout=plan["timeout"])
+            failed = r.returncode != 0
         except Exception as e:                      # noqa: BLE001
             # A slow Overpass or a missing tool must not take the loop down.
             print(f"[act] {plan['tool']}: {e}", file=sys.stderr)
+            failed = True
+        # Say so rather than going quiet. Not for speak_first plans: those
+        # restart this process, so anything said here is never said, and the
+        # thing that was promised has already been announced.
+        if failed and not plan.get("speak_first"):
+            say_muted(intent_mod.failure_reply(lang))
         return True
 
     def act(text):

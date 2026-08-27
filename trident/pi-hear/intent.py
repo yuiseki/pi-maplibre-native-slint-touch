@@ -116,6 +116,24 @@ def build_prompt(transcript):
 # What the deck says as it switches -- in the language it is switching *to*,
 # not the one being left. The last thing heard should match what it is about to
 # expect, or the person answers in the wrong language.
+_FAILURE_REPLY = {"ja": "すみません、もう一度お願いします。",
+                  "en": "Sorry, could you please try again?"}
+
+
+def failure_reply(lang):
+    """What to say when the tool ran and found nothing.
+
+    Whiffing silently is the worst outcome available. A success moves the map
+    and a misparse moves it somewhere wrong, but a tool that exits 1 leaves the
+    deck looking exactly as it does while still thinking, and the speaker cannot
+    tell whether to wait, repeat, or rephrase.
+
+    It does not read back what was misheard. "whenostation" is not a word
+    anybody said, and quoting it suggests they did.
+    """
+    return _FAILURE_REPLY.get(lang or "", _FAILURE_REPLY["ja"])
+
+
 _LANG_REPLY = {"ja": "日本語モードにします。", "en": "Switching to English."}
 
 
