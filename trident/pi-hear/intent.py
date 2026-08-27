@@ -397,8 +397,18 @@ _NAMED_FEATURE_JA = re.compile(
     r"(?:駅|空港|港|城|大学|病院|公園|神社|寺|会議場|美術館|博物館|球場|"
     r"タワー|ドーム|スタジアム))"
     r"\s*(?:を|に|へ)?\s*(?:表示|ひょうじ|見せ|行き|いき|移動)")
+# The preposition is optional because whisper drops it. Real transcripts of the
+# same spoken sentence, a minute apart on 2026-08-27: "Zoom into International
+# Conference Center Hiroshima" and "Zoom International Conference Center
+# Hiroshima". An unstressed "in to" between two stressed words is exactly what
+# a small model loses.
+#
+# Safe to relax because the captured name still has to survive _ZOOM_BARE, which
+# rejects "in" and "out" -- so "zoom out" does not become a request to fly to
+# somewhere called Out.
 _ZOOM_EN = re.compile(
-    r"\bzoom\s+(?:in\s+)?(?:to|on|into|at)\s+(?:the\s+)?(.+?)\s*[.!?]?\s*$",
+    r"\bzoom\s+(?:in\s+)?(?:(?:to|on|into|at)\s+)?(?:the\s+)?(.+?)"
+    r"\s*[.!?]?\s*$",
     re.I)
 
 _PLACE_OF = re.compile(

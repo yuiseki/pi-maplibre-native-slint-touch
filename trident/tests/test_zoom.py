@@ -293,5 +293,61 @@ class NameQueryTest(unittest.TestCase):
         self.assertIn('"name:en"', q)
 
 
+
+class NoPrepositionTest(unittest.TestCase):
+    """"Zoom <place>", with nothing between the verb and the name.
+
+    Real transcript from pi5-deck, 2026-08-27: "Zoom International Conference
+    Center Hiroshima" -- whisper dropped the "in to" that was spoken. The same
+    sentence a minute later came back as "Zoom into ..." and worked, so this is
+    not how anyone types it; it is what the recogniser does to an unstressed
+    preposition between two stressed words.
+
+    Making the preposition optional is safe because the captured name still has
+    to survive _ZOOM_BARE, which already rejects "in" and "out" -- so "zoom out"
+    does not become a request to fly to somewhere called Out.
+    """
+
+    HEARD = (
+        "Zoom International Conference Center Hiroshima",
+        "Zoom Hiroshima station",
+        "Zoom the International Conference Center Hiroshima",
+    )
+
+    def test_a_dropped_preposition_still_zooms(self):
+        for said in self.HEARD:
+            r = intent.by_rule(said, lang="en")
+            self.assertIsNotNone(r, said)
+            self.assertEqual(r["intent"], "zoom_to", said)
+            self.assertTrue(r["place"], said)
+            self.assertNotIn("Zoom", r["place"], said)
+
+    def test_the_name_survives_intact(self):
+        r = intent.by_rule("Zoom International Conference Center Hiroshima",
+                           lang="en")
+        self.assertEqual(r["place"], "International Conference Center Hiroshima")
+
+    def test_the_voice_loop_agrees_it_is_a_zoom(self):
+        """is_zoom_request runs before the nine-city table, which would
+        otherwise find Hiroshima inside the name and fly to the city."""
+        self.assertTrue(intent.is_zoom_request(
+            "Zoom International Conference Center Hiroshima"))
+
+    def test_a_bare_direction_is_not_a_place(self):
+        for said in ("zoom out", "zoom in", "Zoom out.", "zoom"):
+            r = intent.by_rule(said, lang="en")
+            if r is not None:
+                self.assertNotEqual(r["intent"], "zoom_to", said)
+            self.assertFalse(intent.is_zoom_request(said), said)
+
+    def test_the_spoken_form_still_works(self):
+        for said in ("zoom in to Hiroshima station",
+                     "Zoom into Hiroshima station.",
+                     "zoom on Hiroshima station"):
+            r = intent.by_rule(said, lang="en")
+            self.assertIsNotNone(r, said)
+            self.assertEqual(r["place"], "Hiroshima station", said)
+
+
 if __name__ == "__main__":
     unittest.main()
