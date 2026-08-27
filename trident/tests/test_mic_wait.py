@@ -52,9 +52,11 @@ class WaitTest(unittest.TestCase):
         self.assertEqual(sleep.slept, [], "must not sleep before the first probe")
 
     def test_it_waits_and_then_finds_one(self):
+        """settle=0 so this measures the wait loop alone; the confirming look
+        a hot-plug needs is SettleTest's subject, not this one."""
         probe, sleep = Probe(appears_at=4), Sleeper()
         got = pi_hear.wait_for_capture(probe, timeout=60, interval=2,
-                                       sleep=sleep)
+                                       sleep=sleep, settle=0)
         self.assertEqual(got, ["Device"])
         self.assertEqual(probe.calls, 4)
         self.assertEqual(sleep.slept, [2, 2, 2])
@@ -110,6 +112,76 @@ class FlagTest(unittest.TestCase):
         self.assertIn("--mic-wait", r.stdout)
         self.assertIn("default 600", r.stdout,
                       "the default has to be a real wait, not zero")
+
+
+
+class SettleTest(unittest.TestCase):
+    """A card in /proc/asound is not yet a device ALSA will open.
+
+    Traced on pi5-deck 2026-08-27. The mic was plugged in at 18:21:36 and the
+    poll saw it in the same second, proceeded, and arecord failed:
+
+        kernel: usb 1-2: new full-speed USB device number 7
+        pi-hear: using plughw:CARD=Device,DEV=0 (attached: Device)
+        ALSA lib confmisc.c: Cannot get card index for Device
+        arecord: audio open error: No such device
+
+    It recovered on the next restart four seconds later, so the cost is small
+    -- but it is a failure and a restart on the normal path of plugging a mic
+    in, which is the one path this deck takes every time it is used.
+    """
+
+    def test_it_confirms_a_device_that_appeared_while_watching(self):
+        """Two sightings, a settle apart. One sighting is the race."""
+        probe, sleep = Probe(appears_at=3), Sleeper()
+        got = pi_hear.wait_for_capture(probe, timeout=60, interval=2,
+                                       sleep=sleep, settle=1.5)
+        self.assertEqual(got, ["Device"])
+        self.assertEqual(probe.calls, 4, "must look again after the settle")
+        self.assertIn(1.5, sleep.slept)
+
+    def test_one_already_attached_is_not_delayed(self):
+        """It has been there since before this process started, so there is
+        nothing to settle. Delaying it would tax every host with a permanent
+        mic for a race that only the hot-plug path has."""
+        probe, sleep = Probe(appears_at=1), Sleeper()
+        got = pi_hear.wait_for_capture(probe, timeout=60, interval=2,
+                                       sleep=sleep, settle=1.5)
+        self.assertEqual(got, ["Device"])
+        self.assertEqual(probe.calls, 1)
+        self.assertEqual(sleep.slept, [])
+
+    def test_a_card_that_vanishes_again_is_not_used(self):
+        """Unplugged during the settle, or a spurious sighting."""
+        class Flaky:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self):
+                self.calls += 1
+                return ["Device"] if self.calls == 1 else []
+
+        class LateFlaky:
+            """Absent, then a single sighting that does not hold."""
+
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self):
+                self.calls += 1
+                return ["Device"] if self.calls == 2 else []
+
+        probe, sleep = LateFlaky(), Sleeper()
+        got = pi_hear.wait_for_capture(probe, timeout=6, interval=2,
+                                       sleep=sleep, settle=1.5)
+        self.assertIsNone(got)
+
+    def test_no_settle_keeps_the_old_shape(self):
+        probe, sleep = Probe(appears_at=3), Sleeper()
+        got = pi_hear.wait_for_capture(probe, timeout=60, interval=2,
+                                       sleep=sleep, settle=0)
+        self.assertEqual(got, ["Device"])
+        self.assertEqual(probe.calls, 3)
 
 
 if __name__ == "__main__":

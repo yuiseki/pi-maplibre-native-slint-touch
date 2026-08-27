@@ -150,7 +150,7 @@ def read_capture_cards(pcm="/proc/asound/pcm", cards="/proc/asound/cards"):
 
 
 def wait_for_capture(probe, timeout, interval, sleep=time.sleep,
-                     announce=None):
+                     announce=None, settle=1.5):
     """Capture-card names once one is attached, or None if the wait runs out.
 
     On this deck the mic is normally **absent**. It is plugged in to talk to
@@ -170,10 +170,27 @@ def wait_for_capture(probe, timeout, interval, sleep=time.sleep,
     """
     waited = 0.0
     told = False
+    seen_absent = False
     while True:
         cards = probe()
         if cards:
-            return cards
+            if not settle or not seen_absent:
+                # Already attached when we looked: it has been there since
+                # before this process started, so there is nothing to settle.
+                # The race only exists for a device that appears while we watch.
+                return cards
+            # A card in /proc/asound is not yet a device ALSA will open. The
+            # mic plugged in at 18:21:36 was seen in the same second, and
+            # arecord answered "Cannot get card index for Device". Look again
+            # after a pause; two sightings mean the device settled, and one
+            # that vanishes was the race.
+            sleep(settle)
+            waited += settle
+            again = probe()
+            if again:
+                return again
+            continue
+        seen_absent = True
         if waited >= timeout:
             return None
         if not told:
