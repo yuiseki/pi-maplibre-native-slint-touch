@@ -72,6 +72,31 @@ PLACES = {
 }
 
 
+def within_arm_window(captured_at, armed_until, now=None):
+    """True when an utterance was *spoken* inside the arming window.
+
+    Judged on when the audio was captured, not on when the recogniser finished
+    with it. The window is a claim about how long a person pauses between the
+    wake word and the place; putting the machine's own thinking time inside it
+    ties that claim to whichever model happens to be loaded.
+
+    That is not hypothetical. On 2026-08-28 the English model changed from
+    ggml-base.bin to ggml-small-q8_0.bin, ASR went from about 2.6s to about 6s,
+    and "Show Hiroshima!" -- transcribed perfectly, spoken three seconds after
+    the deck armed -- was thrown away one second past a deadline it had never
+    come near. Nothing in the log said so: the line read `---- s=0.20`, the
+    score of a failed wake word, because by then the deck was no longer armed.
+
+    armed_until is 0.0 when disarmed, and every real capture time is larger
+    than that, so the falsy case is checked rather than compared.
+    """
+    if not armed_until:
+        return False
+    if captured_at is None:
+        captured_at = time.time() if now is None else now
+    return captured_at < armed_until
+
+
 def find_place(text):
     """Longest place name appearing in the (normalised) text, or None."""
     n = wakelib.normalize(text)
@@ -542,7 +567,7 @@ def main():
             say_muted(intent_mod.failure_reply(lang))
         return True
 
-    def act(text):
+    def act(text, captured_at=None):
         # Touch-to-wake, not voice-wake: while the screensaver is up, ignore
         # voice commands entirely. An utterance already in flight in the worker
         # can finish after the screensaver engages; acting on it would wake the
@@ -566,7 +591,7 @@ def main():
         stands_aside = (intent_mod.is_zoom_request(text)
                         or intent_mod.names_a_thing(text))
         place = None if stands_aside else romaji_match.find_place(text)
-        armed = time.time() < armed_until[0]
+        armed = within_arm_window(captured_at, armed_until[0])
 
         if matched and place:                 # wake + place in one breath
             armed_until[0] = 0.0
@@ -595,7 +620,7 @@ def main():
         else:
             print(f"---- s={score:.2f} '{text}'", flush=True)
 
-    def emit(text):
+    def emit(text, captured_at=None):
         if not text:
             return
         # Show the transcription even when it goes nowhere: on a device whose
@@ -603,7 +628,7 @@ def main():
         # the one thing the user cannot otherwise tell from "it heard nothing".
         publish_state("heard", text, hold=3.0, override=True)
         if args.act and not args.no_wake:
-            act(text)
+            act(text, captured_at)
         elif args.no_wake:
             print(text, flush=True)
         else:
@@ -642,7 +667,7 @@ def main():
                 continue
             if item is None:
                 break
-            samples, dur, peak = item
+            samples, dur, peak, captured_at = item
             # Pause the map's heavy V3D render while we run the CPU-bound ASR, so
             # the recogniser gets the full CPU and responds faster. The map
             # (maplibre-slint-gl) watches this file and skips rendering while it
@@ -671,7 +696,7 @@ def main():
                 print(f"[flush] dur={dur:.1f}s peak={peak:.4f} "
                       f"uttq={utt_q.qsize()} -> '{text}'",
                       file=sys.stderr, flush=True)
-            emit(text)
+            emit(text, captured_at)
 
     worker = threading.Thread(target=transcribe_worker, daemon=True)
     worker.start()
@@ -819,7 +844,10 @@ def main():
                             utt_q.get_nowait()
                         except queue.Empty:
                             break
-                    utt_q.put((samples, dur, peak))
+                    # The capture time travels with the audio: the arm
+                    # window is judged on when this was spoken, not on
+                    # when the recogniser gets round to it.
+                    utt_q.put((samples, dur, peak, time.time()))
         except KeyboardInterrupt:
             pass
         finally:
