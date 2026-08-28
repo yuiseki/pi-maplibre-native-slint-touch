@@ -33,7 +33,12 @@ exit "${NMCLI_RC:-0}"
 """
 
 
-def run(args, conn_names=None, dev_status=None, rc=None):
+FAKE_JOURNALCTL = r"""#!/usr/bin/env bash
+printf '%s\n' "${JOURNAL_LINES:-}"
+"""
+
+
+def run(args, conn_names=None, dev_status=None, rc=None, journal=None):
     """Run pi-wifi with a fake nmcli. Returns (returncode, stdout, stderr, calls)."""
     tmp = tempfile.mkdtemp(prefix="pi-wifi.")
     fake = os.path.join(tmp, "nmcli")
@@ -43,9 +48,16 @@ def run(args, conn_names=None, dev_status=None, rc=None):
     log = os.path.join(tmp, "calls")
     open(log, "w").close()
 
+    fakej = os.path.join(tmp, "journalctl")
+    with open(fakej, "w") as fh:
+        fh.write(FAKE_JOURNALCTL)
+    os.chmod(fakej, 0o755)
+
     env = dict(os.environ)
     env["PI_WIFI_NMCLI"] = fake
     env["PI_WIFI_SUDO"] = ""        # never escalate in a test
+    env["PI_WIFI_JOURNALCTL"] = fakej
+    env["JOURNAL_LINES"] = journal or ""
     env["NMCLI_LOG"] = log
     if conn_names is not None:
         env["NMCLI_CONN_NAMES"] = conn_names
@@ -150,11 +162,6 @@ class SwitchingProtectsTheCurrentLink(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertTrue(any("connection up cafe-wifi" in c for c in calls), calls)
 
-    def test_a_failed_switch_says_how_to_look(self):
-        rc, out, err, calls = run(["--switch", "nope", "--force"], rc=4)
-        self.assertNotEqual(rc, 0)
-        self.assertIn("--list", err)
-
     def test_switch_without_a_name_is_a_usage_error(self):
         rc, out, err, calls = run(["--switch"])
         self.assertEqual(rc, 2)
@@ -190,6 +197,63 @@ class ReadOnlyActions(unittest.TestCase):
         rc, out, err, calls = run(["--wat"])
         self.assertEqual(rc, 2)
         self.assertEqual(calls, [])
+
+
+class TheDiagnosisAfterAFailedSwitch(unittest.TestCase):
+    """What pi-wifi says when `nmcli connection up` fails.
+
+    It said "Is X a saved profile? (pi-wifi --list)" unconditionally. On
+    2026-08-28 that was said about a profile sitting in the --list output two
+    lines above, which sent the search in the wrong direction entirely. The
+    real event was in the supplicant log, and it named a different access
+    point: the one the deck was leaving had rejected reassociation, and the
+    SSID being switched TO was temp-disabled as collateral.
+    """
+
+    # The actual lines from that failure, with the phone hotspot's BSSID.
+    REAL = ("wlan0: CTRL-EVENT-ASSOC-REJECT bssid=e2:9a:a1:02:dc:98 status_code=16\n"
+            "wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"yuiseki_redmi\" "
+            "auth_failures=1 duration=10 reason=CONN_FAILED")
+
+    def test_an_unknown_profile_is_still_told_to_look_at_the_list(self):
+        rc, out, err, calls = run(["--switch", "nope", "--force"], rc=4)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("--list", err)
+
+    def test_a_known_profile_is_not_told_it_might_not_exist(self):
+        rc, out, err, calls = run(["--switch", "yuiseki_redmi", "--force"],
+                                  conn_names="yuiseki_redmi", rc=4)
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("saved profile", err)
+
+    def test_a_known_profile_gets_the_radio_level_reason(self):
+        rc, out, err, calls = run(["--switch", "yuiseki_redmi", "--force"],
+                                  conn_names="yuiseki_redmi", rc=4,
+                                  journal=self.REAL)
+        self.assertIn("ASSOC-REJECT", err)
+
+    def test_no_secrets_is_not_reported_as_a_wrong_password(self):
+        # NetworkManager asks for new secrets when association times out, so
+        # "Secrets were required" arrives for failures that have nothing to do
+        # with the passphrase. Saying so is the whole point of this message.
+        rc, out, err, calls = run(["--switch", "yuiseki_redmi", "--force"],
+                                  conn_names="yuiseki_redmi", rc=4,
+                                  journal=self.REAL)
+        self.assertNotIn("wrong password", err.lower())
+        self.assertIn("association", err.lower())
+
+    def test_a_silent_journal_does_not_invent_a_reason(self):
+        rc, out, err, calls = run(["--switch", "yuiseki_redmi", "--force"],
+                                  conn_names="yuiseki_redmi", rc=4, journal="")
+        self.assertNotIn("ASSOC-REJECT", err)
+        self.assertNotEqual(rc, 0)
+
+    def test_a_successful_switch_says_nothing_about_failures(self):
+        rc, out, err, calls = run(["--switch", "yuiseki_redmi", "--force"],
+                                  conn_names="yuiseki_redmi",
+                                  journal=self.REAL)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("ASSOC-REJECT", err)
 
 
 if __name__ == "__main__":

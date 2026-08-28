@@ -27,6 +27,9 @@
 set -u
 
 NMCLI="${PI_WIFI_NMCLI:-nmcli}"
+# Only read after a failed switch, to say what actually happened rather than
+# guessing. NetworkManager's own error is second-order and misleads.
+JOURNALCTL="${PI_WIFI_JOURNALCTL:-journalctl}"
 # -n so a headless deck fails fast instead of waiting on a password prompt
 # nobody is there to answer. Empty when already root, or when a test says so.
 if [ -n "${PI_WIFI_SUDO+x}" ]; then
@@ -150,7 +153,35 @@ EOF
     if [ "$rc" -eq 0 ]; then
       echo "pi-wifi: $IFACE = $($NMCLI -t -g IP4.ADDRESS device show "$IFACE" 2>/dev/null | head -1)"
     else
-      echo "pi-wifi: switch failed (rc=$rc). Is \"$TARGET\" a saved profile? (pi-wifi --list)" >&2
+      echo "pi-wifi: switch failed (rc=$rc)" >&2
+      # Say which of the two failures this was. Reporting "is it a saved
+      # profile?" for a profile that is plainly in --list sends the search in
+      # exactly the wrong direction, which is what happened on 2026-08-28.
+      if ! $NMCLI -t -f NAME connection show 2>/dev/null | grep -qxF "$CONN"; then
+        echo "pi-wifi: \"$TARGET\" is not among the saved connections (pi-wifi --list)" >&2
+      else
+        echo "pi-wifi: the profile \"$CONN\" exists, so that is not what is missing." >&2
+        # NetworkManager asks for new secrets when association times out, so
+        # "Secrets were required, but not provided" arrives for failures that
+        # have nothing to do with the key. On a headless deck there is no
+        # secret agent to answer, which turns any association failure into
+        # what reads like a password problem.
+        echo "pi-wifi: NetworkManager requests new secrets whenever association fails, and" >&2
+        echo "pi-wifi: with no agent to answer that surfaces as \"Secrets were required\"." >&2
+        echo "pi-wifi: It is not evidence of a wrong passphrase. Look at the radio first:" >&2
+        ev=$($JOURNALCTL --since "-3min" --no-pager -o cat 2>/dev/null \
+             | grep -E "CTRL-EVENT-ASSOC-REJECT|CTRL-EVENT-SSID-TEMP-DISABLED|association took too long" \
+             | tail -4)
+        if [ -n "$ev" ]; then
+          printf '%s\n' "$ev" | sed 's/^/pi-wifi:   /' >&2
+          # The BSSID in a reject is whichever one the supplicant was still
+          # dealing with -- often the network being left, not the one being
+          # joined, whose SSID then gets temp-disabled as collateral.
+          echo "pi-wifi:   (a BSSID above may belong to the network being left, not this one)" >&2
+        else
+          echo "pi-wifi:   (no association events in the journal for the last 3 minutes)" >&2
+        fi
+      fi
     fi
     exit $rc;;
 esac
