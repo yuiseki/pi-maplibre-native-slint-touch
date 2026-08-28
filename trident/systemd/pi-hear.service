@@ -18,6 +18,13 @@ Environment=LC_ALL=C.UTF-8 LANG=C.UTF-8
 # is a daily decision, and pointing at an absent one is not a quiet fallback
 # but a restart loop -- arecord exits, pi-hear exits with it, forever.
 Environment=PI_HEAR_DEVICE=plughw:CARD=Device,DEV=0
+# Which model (PI_HEAR_MODEL). It travels with the language rather than
+# with the build: the multilingual base reads Japanese well but refuses
+# Japanese-accented English outright, answering with whisper's
+# "(speaking in foreign language)" placeholder. A deck spoken to mainly in
+# English wants ggml-small-q8_0.bin and a reply that takes about 5s
+# instead of 2.6s. Set it in /etc/default/pi-hear.
+Environment=PI_HEAR_MODEL=/home/yuiseki/src/whisper.cpp/models/ggml-base.bin
 # Which language to listen in (PI_HEAR_LANG). Everyday use is Japanese; a demo
 # to an English-speaking audience is a line in this file and a restart. The
 # leading "-" means the file is optional.
@@ -30,7 +37,7 @@ EnvironmentFile=-/etc/default/pi-hear-lang
 # Empty --whisper-prompt = no initial-prompt biasing (intentional).
 ExecStart=/home/yuiseki/.venv-ahear/bin/python /home/yuiseki/src/pi-hear/pi_hear.py \
   --engine whisper \
-  --whisper-model /home/yuiseki/src/whisper.cpp/models/ggml-base.bin \
+  --whisper-model ${PI_HEAR_MODEL} \
   --whisper-prompt "" \
   --alsa-device ${PI_HEAR_DEVICE} \
   --samplerate 16000 \

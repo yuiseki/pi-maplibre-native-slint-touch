@@ -228,7 +228,26 @@ def pick_alsa_device(spec, available):
     return None
 
 
-def main():
+def _env_flag(name):
+    """True when an environment variable asks for something.
+
+    systemd writes an empty value for a setting that is present but unset, and
+    a person writes 0 or no to turn one off; neither is a request to switch a
+    diagnostic on.
+    """
+    v = (os.environ.get(name) or "").strip().lower()
+    return v not in ("", "0", "no", "off", "false")
+
+
+def build_parser():
+    """The command line, built apart from main() so its defaults are testable.
+
+    Several defaults come from the environment rather than from ExecStart,
+    because the settings that change from day to day -- the language, the
+    microphone, the model that suits that language -- are reachable by a spoken
+    command or by an EnvironmentFile, and neither should need the unit's
+    ExecStart duplicated in a drop-in to take effect.
+    """
     ap = argparse.ArgumentParser(
         description="pi-hear: Japanese speech → text (VAD-segmented, pluggable ASR)"
     )
@@ -287,12 +306,27 @@ def main():
     ap.add_argument("--preroll", type=float, default=0.5,
                     help="seconds of audio kept before speech onset (anti-clip)")
     ap.add_argument("--debug", action="store_true",
-                    help="print VAD state and per-utterance timing to stderr")
+                    default=_env_flag("PI_HEAR_DEBUG"),
+                    help="print VAD state and per-utterance timing to stderr. "
+                         "Defaults from PI_HEAR_DEBUG: the per-utterance peak "
+                         "is what separates a mic that heard nothing from a "
+                         "recogniser that understood nothing")
     # whisper.cpp backend
     ap.add_argument("--whisper-bin", default="/home/yuiseki/src/whisper.cpp/build/bin/whisper-cli",
                     help="path to whisper.cpp whisper-cli binary")
-    ap.add_argument("--whisper-model", default="/home/yuiseki/src/whisper.cpp/models/ggml-tiny.bin",
-                    help="path to a ggml whisper model (tiny is the viable one on Pi 4)")
+    # Which model, from the environment for the same reason as --language:
+    # the two travel together. The multilingual base reads Japanese well but
+    # will not accept Japanese-accented English at all, answering with
+    # whisper's "(speaking in foreign language)" placeholder, so a deck that is
+    # mainly spoken to in English wants a larger model and a slower reply. The
+    # English-only base is faster still and finds the place, but it fails the
+    # wake word, so this is settled by measurement rather than by size.
+    ap.add_argument("--whisper-model",
+                    default=(os.environ.get("PI_HEAR_MODEL")
+                             or "/home/yuiseki/src/whisper.cpp/models/ggml-tiny.bin"),
+                    help="path to a ggml whisper model (tiny is the viable one "
+                         "on Pi 4). Defaults from PI_HEAR_MODEL so the model "
+                         "can follow the language without editing the unit")
     ap.add_argument("--whisper-prompt", default="トライデント",
                     help="initial prompt to bias whisper toward domain words "
                          "('' to disable)")
@@ -358,7 +392,11 @@ def main():
                     help="publish what we are doing here (listening / asr / "
                          "muted / paused) so the map can show a mic indicator; "
                          "empty string disables")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     dev = None if args.device == "default" else find_input_device(args.device)
     if args.device != "default" and dev is None:

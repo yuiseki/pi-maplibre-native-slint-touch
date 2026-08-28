@@ -23,3 +23,43 @@
 # as do "Hiroshima" and 広島. The reply is spoken in whichever language the
 # recogniser came back in.
 PI_HEAR_LANG=ja
+
+# Which model the recogniser uses (PI_HEAR_MODEL). This travels with the
+# language above, because the language decides which model is adequate.
+#
+# Measured on pi5-deck, 2026-08-28, on one real recording of "Show Hiroshima"
+# spoken by a Japanese speaker:
+#
+#   ggml-base.bin        -l en    (speaking in foreign language)   2.6s
+#   ggml-base.bin        -l auto  しょうギロスマ                    3.6s
+#   ggml-base.en.bin     -l en    So, Hiroshima!                   2.2s
+#   ggml-small-q8_0.bin  -l en    Show Hiroshima!                  5.1s
+#
+# The multilingual base does not return a wrong guess for accented English, it
+# returns whisper's no-speech placeholder, so no amount of rule-writing
+# downstream can recover it. -l auto only appears to work here: it transcribes
+# the English as Japanese phonetics, which happens to romanise onto a place
+# name but will not survive a sentence with a category in it.
+#
+# The English-only base is the fastest that reads the place, and it is still
+# the wrong choice: it renders the wake word as "Okay, to right end.", which
+# does not match. That is why this is settled by measurement.
+#
+#   ggml-base.bin        Japanese everyday use
+#   ggml-small-q8_0.bin  English, at about 5s instead of 2.6s and +116MB
+#
+# Beam width is not a saving here: -bs 1 dropped the place name entirely
+# ("So, here's the map.") for no gain in latency, so the default -bs 5 stands.
+#PI_HEAR_MODEL=/home/yuiseki/src/whisper.cpp/models/ggml-base.bin
+
+# Keep every utterance as a wav here (PI_HEAR_RECORD_DIR), empty to keep none.
+# This is a microphone in someone's room, so it is off unless asked for. It is
+# also the only honest way to compare two recognisers, because typed strings
+# and TTS both lie about what a person at a microphone sounds like. Do not put
+# it under /tmp: a reboot takes the corpus with it, which has happened.
+#PI_HEAR_RECORD_DIR=/home/yuiseki/utt
+
+# Log one line per utterance with its measured peak (PI_HEAR_DEBUG=1). This is
+# what separates "the mic heard nothing" from "the recogniser understood
+# nothing" -- two failures that look identical in the journal otherwise.
+#PI_HEAR_DEBUG=1
