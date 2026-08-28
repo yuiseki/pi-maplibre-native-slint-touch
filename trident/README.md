@@ -267,7 +267,7 @@ pi-flyto tokyo
 
 ### 常駐(systemd, 再起動で自動復帰)
 
-上の手動起動は実験用。常用は `systemd/pi-hear.service`(地図の `maplibre-slint-gl.service` と同様に boot 自動起動・`Restart=always`)。CHANGEEK USB マイクを **index でなく CARD 名**(`plughw:CARD=Device,DEV=0`)で参照し、再起動時の USB 列挙順ズレに耐える。`whisper-cli` は PATH 外なので unit の `Environment=PATH` に build dir を入れてある。
+上の手動起動は実験用。常用は `systemd/pi-hear.service`(地図の `maplibre-slint-gl.service` と同様に boot 自動起動・`Restart=always`)。マイクを **index でなく CARD 名**で参照し、再起動時の USB 列挙順ズレに耐える。ただし **CARD 名も動く**: ALSA の id は製品文字列の末尾の語から作られるので、`USB Audio Device` と `USB PnP Sound Device` のように末尾が同じ機器が同居すると衝突し、先に列挙されたほうが素の名前を取り、もう一方に `_1` が付く。2026-08-28 に pi5-deck で1時間のうちに両方向に入れ替わった。対策は `etc/snd-usb-audio-ids.modprobe` で vid:pid ごとに id を固定すること(`Mic` / `Spk`)。`whisper-cli` は PATH 外なので unit の `Environment=PATH` に build dir を入れてある。
 
 ```bash
 sudo install -m644 trident/systemd/pi-hear.service /etc/systemd/system/
@@ -384,8 +384,12 @@ pi4(A72)で一番苦しかった推論時間が縮む。ビルドは pi5-deck �
   **sox で事前変換してキャッシュ**するので、再生は変換なしの `btspk_raw` への素通しになる。
   初回だけ変換コストを払い、以降はむしろ速い。※sox は出力の形式を拡張子で決めるので、
   キャッシュの `.tmp` 名に書くには `-t wav` が要る(無いと exit 2)。
-- マイクは C-Media PCM2902 = README の表の CHANGEEK と同型。`plughw:CARD=Device,DEV=0` の
-  arecord 経路がそのまま使える(card 名が `Device` なので unit を書き換えずに済む)。
+- マイクは C-Media PCM2902 = README の表の CHANGEEK と同型。`plughw:CARD=Mic,DEV=0` の
+  arecord 経路で使う(id は modprobe で固定。素の autoprobe だと `Device` か `Device_1` に
+  なり、どちらになるかは列挙順で決まる)。
+- **このマイクはキャプチャ音量 0/16 で現れる。**switch は on のままなので健全に見えるが、
+  しきい値 0.08 に対して実測 0.016 しか出ず、発話が一度も検出されない。挿し替えと
+  モジュール再読み込みのたびに戻るので、`pi-hear.service.d` の `ExecStartPre` で入れ直す。
 - **マイクの調整は「自分で音を出して自分で録る」**。スピーカーが繋がっているなら、
   `pi-say` で喋らせて `arecord` で拾えば、人手なしで利得としきい値を実測できる。
   実測値(Adafruit 3367 mini USB mic、`Mic` 12=17.85dB、AGC off、50cm): 発話 RMS 0.267 /
@@ -426,7 +430,7 @@ pi4(A72)で一番苦しかった推論時間が縮む。ビルドは pi5-deck �
     ALSA plug が 44100→16000 を綺麗にリサンプル(PortAudio の16k不可 と pi-hear の np.interp
     線形補間の歪み=Razerで`(笑)(音楽)`化、の両方を回避)。CHANGEEK(PCM2902)はこれで崩れ無し・
     gain不要(発話 peak~0.15)。Razer は PortAudio で16k開けたので sounddevice+gain3.5 だった。
-    card番号が動くなら `plughw:CARD=Device,DEV=0`。
+    card番号が動くなら CARD 名で参照する。名前も衝突しうるので id は modprobe で固定する。
   - 切り分け検証: `arecord -D plughw:3,0 -f S16_LE -r 16000 -c1 -d 10 x.wav` で直接録音し
     `whisper-cli` にかけると、pi-hear 経路と分離してマイク単体の素性が分かる。
   - 教訓: マイクを替えただけで、ネイティブ rate / PortAudio のレベル / リサンプル品質が変わり、

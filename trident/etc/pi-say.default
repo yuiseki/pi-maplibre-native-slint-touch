@@ -1,18 +1,35 @@
 # /etc/default/pi-say -- what this machine's speaker needs.
 #
-# pi5-deck, wired: a UGREEN USB audio adapter (KTMicro, 12d1:0010), which ALSA
-# names CARD=Audio. Card numbers move with the order things are plugged in;
-# the name comes from the product and does not. The microphone is a different
-# card with a different name (CARD=Device), so the two cannot be confused.
-PI_SAY_DEVICE=plughw:CARD=Audio,DEV=0
+# pi5-deck, wired: a Unitek Y-247A USB audio adapter (0d8c:0014), pinned to
+# CARD=Spk by /etc/modprobe.d/snd-usb-audio-ids.conf (see
+# etc/snd-usb-audio-ids.modprobe).
+#
+# Card numbers move with the order things are plugged in, and the product name
+# is NOT the refuge it looks like: ALSA derives the id from the last word of
+# the product string, so "USB Audio Device" and "USB PnP Sound Device" collide
+# and whichever enumerates first takes the bare name while the other gets a
+# "_1" suffix. On 2026-08-28 this deck saw it both ways within an hour -- once
+# with pi-hear recording the speaker adapter's empty mic jack, once with pi-say
+# playing into the microphone. Neither looks like a fault: the card is healthy,
+# the format is right, the level is simply zero.
+#
+# So the ids are pinned by vid:pid and the names here are stable by
+# construction. The previous adapter was a UGREEN (KTMicro, 12d1:0010), which
+# named itself CARD=Audio; if it comes back, give it the Spk slot rather than
+# editing every consumer.
+PI_SAY_DEVICE=plughw:CARD=Spk,DEV=0
 
-# Nothing else. The three settings below this line exist for Bluetooth and are
-# deliberately absent now:
+# The three settings below this line came from Bluetooth. Two of them are back,
+# for a different reason -- the Unitek's hardware rates, not a sink's fixed
+# ones -- and LEAD_MS stays gone:
 #
 #   PI_SAY_RATE / PI_SAY_CHANNELS  an A2DP sink runs at a fixed 48 kHz stereo,
 #       and letting ALSA convert piper's 22050 Hz mono on the fly buzzed
-#       audibly, so the cache had to hold pre-converted audio. A wired DAC
-#       takes 22050 mono directly and there is nothing to convert.
+#       audibly, so the cache had to hold pre-converted audio. The UGREEN took
+#       22050 mono directly and needed neither. The Unitek offers only 48000
+#       and 44100, stereo, so both are set again -- sox converts once into the
+#       cache rather than ALSA converting on every playback. Read the rates
+#       from /proc/asound/card*/stream0 before assuming a wired DAC is free.
 #
 #   PI_SAY_LEAD_MS  a Bluetooth speaker lets its amp sleep between streams and
 #       took about a second to come back, eating the start of every phrase --

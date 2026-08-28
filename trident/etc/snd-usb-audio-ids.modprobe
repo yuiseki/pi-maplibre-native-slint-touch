@@ -1,0 +1,25 @@
+# Fix the ALSA card id of each known USB audio device. 2026-08-28.
+#
+# ALSA derives a card id from the product string's last word, so two devices
+# whose strings both end in "Device" collide and the loser gets a "_1" suffix:
+#
+#   08bb:2902  "USB PnP Sound Device"  mic stick
+#   0d8c:0014  "USB Audio Device"      Unitek Y-247A adapter, speaker out
+#
+# Which one takes the bare name depends on enumeration order, so it changes on
+# every reboot and every re-plug. On 2026-08-28 the deck saw it both ways
+# within an hour: first the adapter was "Device" and pi-hear recorded its empty
+# mic jack, then a reboot flipped it and pi-say tried to play into the mic.
+# Nothing looks broken when this happens -- arecord succeeds, the card is
+# healthy, the level is simply zero.
+#
+# So the id is pinned here by vid:pid instead, and the names are used by
+# /etc/default/pi-hear (PI_HEAR_DEVICE) and /etc/default/pi-say
+# (PI_SAY_DEVICE). Devices not listed keep autoprobed names, so the DJI Mic
+# Mini receiver is still "MINI".
+#
+# To check after a change, without a reboot:
+#   sudo systemctl stop pi-hear
+#   sudo modprobe -r snd_usb_audio && sudo modprobe snd_usb_audio
+#   cat /proc/asound/cards
+options snd-usb-audio vid=0x08bb,0x0d8c pid=0x2902,0x0014 id=Mic,Spk
