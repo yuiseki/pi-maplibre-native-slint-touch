@@ -181,6 +181,16 @@ class ReadOnlyActions(unittest.TestCase):
         for verb in ("connection add", "connection modify", "connection up"):
             self.assertNotIn(verb, joined)
 
+    def test_list_shows_whether_a_profile_connects_on_its_own(self):
+        # Priority alone does not answer the question people actually ask of
+        # this list. A profile at priority 0 with autoconnect=no is never
+        # considered at all, and reading only the priority column suggests the
+        # opposite -- that it is merely ranked equal.
+        rc, out, err, calls = run(["--list"])
+        fields = [c for c in calls if "connection show" in c and "-f " in c]
+        self.assertTrue(fields, calls)
+        self.assertIn("NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY", fields[0])
+
     def test_list_changes_nothing(self):
         rc, out, err, calls = run(["--list"])
         joined = " | ".join(calls)
@@ -254,6 +264,94 @@ class TheDiagnosisAfterAFailedSwitch(unittest.TestCase):
                                   journal=self.REAL)
         self.assertEqual(rc, 0, err)
         self.assertNotIn("ASSOC-REJECT", err)
+
+
+class AutoconnectIsAPolicyOfItsOwn(unittest.TestCase):
+    """--auto / --no-auto / --priority, and why they do not touch security.
+
+    Profiles are added autoconnect=no so a network typed in from the field
+    cannot outrank the cluster AP at the next boot. That is the right default
+    and the wrong permanent state for a phone hotspot, which is the whole
+    point of carrying the deck out of the house: away from the AP the radio
+    would otherwise sit unconnected until somebody types --switch by hand.
+
+    Priorities go NEGATIVE rather than raising the AP's. The AP profile is
+    owned by netplan (/etc/netplan/90-NM-*.yaml), not by
+    /etc/NetworkManager/system-connections, so leaving it untouched is worth a
+    minus sign. Higher wins in NetworkManager, and the AP sits at 0.
+
+    The hazard this also closes: `--ssid X` with no --pass used to run
+    `connection modify X wifi-sec.key-mgmt none` on an existing profile, which
+    silently strips WPA from a working network. Adding a flag people will want
+    to combine with --ssid makes that far easier to trip over, so saying
+    nothing about security now means nothing is done to it.
+    """
+
+    def test_auto_turns_autoconnect_on(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--auto"],
+                                  conn_names="hotspot")
+        self.assertEqual(rc, 0, err)
+        mod = [c for c in calls if "connection modify" in c]
+        self.assertTrue(mod, calls)
+        self.assertIn("connection.autoconnect yes", " ".join(mod))
+
+    def test_auto_ranks_below_the_home_ap(self):
+        # The AP is at 0 and higher wins, so this has to be negative.
+        rc, out, err, calls = run(["--ssid", "hotspot", "--auto"],
+                                  conn_names="hotspot")
+        mod = " ".join(c for c in calls if "connection modify" in c)
+        self.assertRegex(mod, r"connection\.autoconnect-priority -\d+")
+
+    def test_auto_does_not_touch_security(self):
+        # No --pass was given, so nothing was said about the key.
+        rc, out, err, calls = run(["--ssid", "hotspot", "--auto"],
+                                  conn_names="hotspot")
+        self.assertNotIn("wifi-sec", " ".join(calls))
+
+    def test_no_auto_turns_it_off_again(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--no-auto"],
+                                  conn_names="hotspot")
+        self.assertEqual(rc, 0, err)
+        mod = " ".join(c for c in calls if "connection modify" in c)
+        self.assertIn("connection.autoconnect no", mod)
+
+    def test_an_explicit_priority_wins(self):
+        rc, out, err, calls = run(
+            ["--ssid", "hotspot", "--auto", "--priority", "-30"],
+            conn_names="hotspot")
+        mod = " ".join(c for c in calls if "connection modify" in c)
+        self.assertIn("connection.autoconnect-priority -30", mod)
+
+    def test_a_new_profile_can_be_added_already_automatic(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--pass", "k", "--auto"])
+        add = [c for c in calls if "connection add" in c]
+        self.assertEqual(len(add), 1, calls)
+        self.assertIn("connection.autoconnect yes", add[0])
+        self.assertIn("wifi-sec.psk k", add[0])
+
+    def test_a_new_profile_is_still_manual_by_default(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--pass", "k"])
+        add = [c for c in calls if "connection add" in c][0]
+        self.assertIn("connection.autoconnect no", add)
+
+    def test_saying_nothing_about_an_existing_profile_changes_nothing(self):
+        # This used to strip WPA from a working profile.
+        rc, out, err, calls = run(["--ssid", "hotspot"], conn_names="hotspot")
+        self.assertNotIn("wifi-sec", " ".join(calls))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("--pass", err)
+
+    def test_open_is_how_you_ask_for_no_key(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--open"],
+                                  conn_names="hotspot")
+        self.assertEqual(rc, 0, err)
+        mod = " ".join(c for c in calls if "connection modify" in c)
+        self.assertIn("wifi-sec.key-mgmt none", mod)
+
+    def test_a_new_open_profile_still_needs_open(self):
+        rc, out, err, calls = run(["--ssid", "hotspot", "--open"])
+        add = [c for c in calls if "connection add" in c][0]
+        self.assertNotIn("wifi-sec.psk", add)
 
 
 if __name__ == "__main__":

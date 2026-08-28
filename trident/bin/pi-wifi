@@ -5,15 +5,31 @@
 #   pi-wifi --status                 same as above
 #   pi-wifi --list                   list saved + visible networks
 #   pi-wifi --ssid SSID --pass PW    ADD (or update) a saved profile; does NOT switch
+#   pi-wifi --ssid SSID --open       ...declaring it an open network
+#   pi-wifi --ssid SSID --auto       let it connect on its own, below the home AP
+#   pi-wifi --ssid SSID --no-auto    back to manual (--switch only)
+#   pi-wifi --ssid SSID --priority N NetworkManager autoconnect-priority
 #   pi-wifi --switch NAME  [--force] switch to a saved profile (activate it)
 #   pi-wifi --connect NAME [--force] alias of --switch
 #   [--iface IFACE]                  interface (default wlan0)
 #
 # Adding a profile never touches the current link (so it is always safe).
 # Switching is refused if the interface is already connected, unless --force,
-# to protect the priority link (e.g. pi5-w-1). Added profiles are autoconnect=no
+# to protect the priority link (e.g. pi5-w-1). A new profile is autoconnect=no
 # (manual via --switch); the priority network keeps auto-connecting on its own.
-# Open network: omit --pass. NAME may be the profile name or its SSID.
+# A new profile with no --pass is an open network. NAME may be the profile name
+# or its SSID.
+#
+# --auto is for a network the deck should find by itself -- a phone hotspot,
+# where the alternative is a radio sitting unconnected away from the AP until
+# somebody types --switch. It ranks the profile NEGATIVE rather than raising
+# the AP's: higher wins in NetworkManager, the AP sits at 0, and the AP profile
+# belongs to netplan (/etc/netplan/90-NM-*.yaml) rather than to
+# /etc/NetworkManager/system-connections, so not editing it is worth a minus.
+#
+# On an EXISTING profile, saying nothing about security does nothing to it.
+# This used to run `wifi-sec.key-mgmt none`, which strips WPA from a working
+# network without saying so; --open is now how that is asked for.
 #
 # This is the counterpart of pi-net, and the split is deliberate:
 #
@@ -46,6 +62,11 @@ PASS=""
 TARGET=""
 ACTION=""
 FORCE=0
+AUTO=""          # "", "yes" or "no" -- empty means "not asked about"
+PRIO=""
+OPEN=0
+# Below the home AP's 0, so the AP profile never has to be edited.
+DEFAULT_AUTO_PRIORITY=-10
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,6 +75,10 @@ while [ $# -gt 0 ]; do
     --switch|--connect) TARGET="${2:-}"; ACTION=switch; shift 2 || shift;;
     --iface)            IFACE="${2:-}"; shift 2 || shift;;
     --force)            FORCE=1; shift;;
+    --auto)             AUTO=yes; shift;;
+    --no-auto)          AUTO=no;  shift;;
+    --priority)         PRIO="${2:-}"; shift 2 || shift;;
+    --open)             OPEN=1; shift;;
     --status)           ACTION=status; shift;;
     --list)             ACTION=list;   shift;;
     -h|--help)          ACTION=help;   shift;;
@@ -75,15 +100,26 @@ pi-wifi - manage Wi-Fi via NetworkManager
   pi-wifi --status
   pi-wifi --list                   saved + visible networks
   pi-wifi --ssid SSID --pass PW    add/update a saved profile (does NOT switch)
+  pi-wifi --ssid SSID --open       add/update it as an open network
+  pi-wifi --ssid SSID --auto       let it connect on its own (below the home AP)
+  pi-wifi --ssid SSID --no-auto    back to manual (--switch only)
+  pi-wifi --ssid SSID --priority N set autoconnect-priority explicitly
   pi-wifi --switch NAME [--force]   switch to a saved profile (activate)
   pi-wifi --connect NAME [--force]  alias of --switch
   [--iface IFACE]                  default wlan0
 
 Adding a profile never disrupts the current connection. Switching does, so it
 is refused while already connected unless --force (protects e.g. pi5-w-1).
-Added profiles are autoconnect=no (use --switch); the priority network keeps
+A new profile is autoconnect=no (use --switch); the priority network keeps
 auto-connecting. NAME may be a profile name or an SSID. Back to home AP:
   pi-wifi --switch pi5-w-1 --force
+
+--auto suits a phone hotspot: away from the AP the radio would otherwise sit
+unconnected until somebody types --switch. It ranks the profile negative, so
+the AP still wins at home and the AP's own profile is left alone.
+
+On an existing profile, saying nothing about security does nothing to it.
+--open is how an open network is declared.
 
 See also: pi-net (status / reconnect / timed off-grid on the current link).
 EOF
@@ -96,31 +132,62 @@ EOF
 
   list)
     echo "== saved Wi-Fi profiles =="
-    $NMCLI -f NAME,TYPE,AUTOCONNECT-PRIORITY connection show 2>/dev/null | awk 'NR==1 || /wifi|wireless/'
+    # AUTOCONNECT as well as its priority: a profile at priority 0 with
+    # autoconnect=no is never considered at all, and the priority column on its
+    # own reads as though it were merely ranked equal to the others.
+    $NMCLI -f NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show 2>/dev/null \
+      | awk 'NR==1 || /wifi|wireless/'
     echo "== visible networks ($IFACE) =="
     $SUDO $NMCLI -f SSID,SIGNAL,SECURITY device wifi list ifname "$IFACE" 2>/dev/null | head -20
     exit 0;;
 
   add)
     [ -z "$SSID" ] && { echo "pi-wifi: --ssid is required" >&2; exit 2; }
+
+    # The autoconnect half, shared by both branches. Empty AUTO means the
+    # caller said nothing about it, which for an existing profile means leave
+    # it as it is.
+    auto_args=""
+    case "$AUTO" in
+      yes) auto_args="connection.autoconnect yes connection.autoconnect-priority ${PRIO:-$DEFAULT_AUTO_PRIORITY}";;
+      no)  auto_args="connection.autoconnect no"
+           [ -n "$PRIO" ] && auto_args="$auto_args connection.autoconnect-priority $PRIO";;
+      *)   [ -n "$PRIO" ] && auto_args="connection.autoconnect-priority $PRIO";;
+    esac
+
     if $NMCLI -t -f NAME connection show 2>/dev/null | grep -qxF "$SSID"; then
+      # Existing profile: change only what was actually asked for. Security is
+      # touched only by --pass or --open, never by their absence.
+      sec_args=""
       if [ -n "$PASS" ]; then
-        $SUDO $NMCLI connection modify "$SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
-          && echo "pi-wifi: updated profile \"$SSID\""
-      else
-        $SUDO $NMCLI connection modify "$SSID" wifi-sec.key-mgmt none \
-          && echo "pi-wifi: updated profile \"$SSID\" (open)"
+        sec_args="wifi-sec.key-mgmt wpa-psk wifi-sec.psk $PASS"
+      elif [ "$OPEN" -eq 1 ]; then
+        sec_args="wifi-sec.key-mgmt none"
       fi
+      if [ -z "$sec_args" ] && [ -z "$auto_args" ]; then
+        echo "pi-wifi: \"$SSID\" already exists and nothing was asked for." >&2
+        echo "pi-wifi: give --pass, --open, --auto, --no-auto or --priority." >&2
+        exit 2
+      fi
+      # shellcheck disable=SC2086  # both halves are deliberately word-split
+      $SUDO $NMCLI connection modify "$SSID" $sec_args $auto_args \
+        && echo "pi-wifi: updated profile \"$SSID\"${sec_args:+ (security)}${auto_args:+ (autoconnect)}"
+      exit $?
+    fi
+
+    # New profile. Manual unless told otherwise, so a network typed in from the
+    # field cannot outrank the AP at the next boot.
+    [ -z "$auto_args" ] && auto_args="connection.autoconnect no"
+    if [ -n "$PASS" ]; then
+      # shellcheck disable=SC2086
+      $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
+        $auto_args -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+        && echo "pi-wifi: added profile \"$SSID\" (not switched; pi-wifi --switch \"$SSID\" --force)"
     else
-      if [ -n "$PASS" ]; then
-        $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
-          connection.autoconnect no -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
-          && echo "pi-wifi: added profile \"$SSID\" (not switched; pi-wifi --switch \"$SSID\" --force)"
-      else
-        $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
-          connection.autoconnect no \
-          && echo "pi-wifi: added open profile \"$SSID\" (not switched)"
-      fi
+      # shellcheck disable=SC2086
+      $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
+        $auto_args \
+        && echo "pi-wifi: added open profile \"$SSID\" (not switched)"
     fi
     exit $?;;
 
