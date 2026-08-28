@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# pi-wifi: manage Wi-Fi networks via NetworkManager.
+#
+#   pi-wifi                          show current Wi-Fi status (default)
+#   pi-wifi --status                 same as above
+#   pi-wifi --list                   list saved + visible networks
+#   pi-wifi --ssid SSID --pass PW    ADD (or update) a saved profile; does NOT switch
+#   pi-wifi --switch NAME  [--force] switch to a saved profile (activate it)
+#   pi-wifi --connect NAME [--force] alias of --switch
+#   [--iface IFACE]                  interface (default wlan0)
+#
+# Adding a profile never touches the current link (so it is always safe).
+# Switching is refused if the interface is already connected, unless --force,
+# to protect the priority link (e.g. pi5-w-1). Added profiles are autoconnect=no
+# (manual via --switch); the priority network keeps auto-connecting on its own.
+# Open network: omit --pass. NAME may be the profile name or its SSID.
+#
+# This is the counterpart of pi-net, and the split is deliberate:
+#
+#   pi-wifi   which networks exist -- add one, list them, choose between them
+#   pi-net    what the current link is doing -- status, reconnect, timed off-grid
+#
+# nmcli and sudo come from the environment (PI_WIFI_NMCLI, PI_WIFI_SUDO) for the
+# same reason pi-lang takes its systemctl that way: the interesting behaviour is
+# which nmcli command gets built, and a test must be able to see that without a
+# radio, without root, and without changing the machine it runs on.
+set -u
+
+NMCLI="${PI_WIFI_NMCLI:-nmcli}"
+# -n so a headless deck fails fast instead of waiting on a password prompt
+# nobody is there to answer. Empty when already root, or when a test says so.
+if [ -n "${PI_WIFI_SUDO+x}" ]; then
+  SUDO="$PI_WIFI_SUDO"
+elif [ "$(id -u)" = "0" ]; then
+  SUDO=""
+else
+  SUDO="sudo -n"
+fi
+
+IFACE=wlan0
+SSID=""
+PASS=""
+TARGET=""
+ACTION=""
+FORCE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ssid)             SSID="${2:-}"; shift 2 || shift;;
+    --pass|--password)  PASS="${2:-}"; shift 2 || shift;;
+    --switch|--connect) TARGET="${2:-}"; ACTION=switch; shift 2 || shift;;
+    --iface)            IFACE="${2:-}"; shift 2 || shift;;
+    --force)            FORCE=1; shift;;
+    --status)           ACTION=status; shift;;
+    --list)             ACTION=list;   shift;;
+    -h|--help)          ACTION=help;   shift;;
+    *) echo "pi-wifi: unknown argument: $1" >&2; exit 2;;
+  esac
+done
+
+# Default action: --ssid given => add a profile; otherwise => status.
+if [ -z "$ACTION" ]; then
+  if [ -n "$SSID" ]; then ACTION=add; else ACTION=status; fi
+fi
+
+case "$ACTION" in
+  help)
+    cat <<'EOF'
+pi-wifi - manage Wi-Fi via NetworkManager
+
+  pi-wifi                          current status (default)
+  pi-wifi --status
+  pi-wifi --list                   saved + visible networks
+  pi-wifi --ssid SSID --pass PW    add/update a saved profile (does NOT switch)
+  pi-wifi --switch NAME [--force]   switch to a saved profile (activate)
+  pi-wifi --connect NAME [--force]  alias of --switch
+  [--iface IFACE]                  default wlan0
+
+Adding a profile never disrupts the current connection. Switching does, so it
+is refused while already connected unless --force (protects e.g. pi5-w-1).
+Added profiles are autoconnect=no (use --switch); the priority network keeps
+auto-connecting. NAME may be a profile name or an SSID. Back to home AP:
+  pi-wifi --switch pi5-w-1 --force
+
+See also: pi-net (status / reconnect / timed off-grid on the current link).
+EOF
+    exit 0;;
+
+  status)
+    $NMCLI -t -f GENERAL.CONNECTION,GENERAL.STATE,IP4.ADDRESS device show "$IFACE" 2>/dev/null \
+      || { echo "pi-wifi: no such interface: $IFACE" >&2; exit 1; }
+    exit 0;;
+
+  list)
+    echo "== saved Wi-Fi profiles =="
+    $NMCLI -f NAME,TYPE,AUTOCONNECT-PRIORITY connection show 2>/dev/null | awk 'NR==1 || /wifi|wireless/'
+    echo "== visible networks ($IFACE) =="
+    $SUDO $NMCLI -f SSID,SIGNAL,SECURITY device wifi list ifname "$IFACE" 2>/dev/null | head -20
+    exit 0;;
+
+  add)
+    [ -z "$SSID" ] && { echo "pi-wifi: --ssid is required" >&2; exit 2; }
+    if $NMCLI -t -f NAME connection show 2>/dev/null | grep -qxF "$SSID"; then
+      if [ -n "$PASS" ]; then
+        $SUDO $NMCLI connection modify "$SSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+          && echo "pi-wifi: updated profile \"$SSID\""
+      else
+        $SUDO $NMCLI connection modify "$SSID" wifi-sec.key-mgmt none \
+          && echo "pi-wifi: updated profile \"$SSID\" (open)"
+      fi
+    else
+      if [ -n "$PASS" ]; then
+        $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
+          connection.autoconnect no -- wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS" \
+          && echo "pi-wifi: added profile \"$SSID\" (not switched; pi-wifi --switch \"$SSID\" --force)"
+      else
+        $SUDO $NMCLI connection add type wifi con-name "$SSID" ifname "$IFACE" ssid "$SSID" \
+          connection.autoconnect no \
+          && echo "pi-wifi: added open profile \"$SSID\" (not switched)"
+      fi
+    fi
+    exit $?;;
+
+  switch)
+    [ -z "$TARGET" ] && { echo "pi-wifi: --switch needs a profile name or SSID" >&2; exit 2; }
+    # Guard: protect the current link unless --force.
+    if [ "$FORCE" -ne 1 ]; then
+      line=$($NMCLI -t -f DEVICE,STATE,CONNECTION device status 2>/dev/null \
+               | awk -F: -v i="$IFACE" '$1==i{print; exit}')
+      st=$(printf '%s' "$line" | cut -d: -f2)
+      cn=$(printf '%s' "$line" | cut -d: -f3-)
+      if [ "$st" = "connected" ]; then
+        echo "already connected to Wi-Fi (\"$cn\" on $IFACE); use --force to switch to \"$TARGET\"" >&2
+        exit 1
+      fi
+    fi
+    # Resolve TARGET: a profile name, else a profile whose SSID matches.
+    CONN="$TARGET"
+    if ! $NMCLI -t -f NAME connection show 2>/dev/null | grep -qxF "$TARGET"; then
+      while IFS=: read -r name typ; do
+        case "$typ" in *wireless*|*wifi*)
+          s=$($NMCLI -t -g 802-11-wireless.ssid connection show "$name" 2>/dev/null)
+          [ "$s" = "$TARGET" ] && { CONN="$name"; break; };;
+        esac
+      done < <($NMCLI -t -f NAME,TYPE connection show 2>/dev/null)
+    fi
+    echo "pi-wifi: switching $IFACE -> \"$CONN\" ..."
+    $SUDO $NMCLI connection up "$CONN" ifname "$IFACE"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "pi-wifi: $IFACE = $($NMCLI -t -g IP4.ADDRESS device show "$IFACE" 2>/dev/null | head -1)"
+    else
+      echo "pi-wifi: switch failed (rc=$rc). Is \"$TARGET\" a saved profile? (pi-wifi --list)" >&2
+    fi
+    exit $rc;;
+esac
