@@ -23,6 +23,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -213,6 +214,55 @@ class ScanParsing(unittest.TestCase):
                "BB\\:BB\\:BB\\:BB\\:BB\\:BB:90:2437 MHz:strong\n")
         aps = w.parse_scan(out)
         self.assertEqual(aps[0][0], "bbbbbbbbbbbb")
+
+
+class Publish(unittest.TestCase):
+    """The five fields pi-gps writes, plus a sixth naming the writer.
+
+    pi-mesh is the only thing that can tell the Meshtastic node where it is,
+    and it must not send back a position that came from the node itself. The
+    five-field format cannot say which is which, so the writer signs its work.
+    Readers that only ever wanted five are unaffected: they index the fields
+    they know about.
+    """
+
+    def out(self):
+        return os.path.join(tempfile.mkdtemp(prefix="pi-wigle-pub."), "pi-gps")
+
+    def test_the_first_five_fields_are_what_pi_gps_writes(self):
+        p = self.out()
+        w.publish(p, 34.387604, 132.454813)
+        f = open(p).read().split()
+        self.assertEqual(f[0], "34.387604")
+        self.assertEqual(f[1], "132.454813")
+        self.assertEqual(f[2], "1")          # a position is a position
+        self.assertEqual(f[3], "0")          # from no satellites
+        self.assertEqual(f[4], "0")
+
+    def test_the_sixth_field_says_who_wrote_it(self):
+        p = self.out()
+        w.publish(p, 1.0, 2.0)
+        self.assertEqual(open(p).read().split()[5], "wigle")
+
+    def test_it_is_one_line(self):
+        p = self.out()
+        w.publish(p, 1.0, 2.0)
+        self.assertEqual(len(open(p).read().strip().splitlines()), 1)
+
+    def test_a_live_receiver_is_not_overwritten(self):
+        p = self.out()
+        with open(p, "w") as fh:
+            fh.write("34.0 132.0 1 7 9\n")
+        self.assertTrue(w.gps_is_live(p))
+
+    def test_a_stale_file_is_free_to_take(self):
+        p = self.out()
+        with open(p, "w") as fh:
+            fh.write("34.0 132.0 1 7 9\n")
+        self.assertFalse(w.gps_is_live(p, now=time.time() + 3600))
+
+    def test_a_missing_file_is_free_to_take(self):
+        self.assertFalse(w.gps_is_live("/nonexistent/pi-gps"))
 
 
 class Key(unittest.TestCase):

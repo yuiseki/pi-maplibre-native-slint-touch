@@ -54,6 +54,9 @@ GPS_OUT = os.environ.get("PI_WIGLE_GPS_OUT", "/dev/shm/pi-gps")
 # A real receiver republishes at 1 Hz, so anything this fresh means one is
 # attached and publishing. Writing over it would be a downgrade.
 GPS_FRESH_S = 5.0
+# Written as the sixth field of the position file, so pi-mesh can tell a
+# trilaterated position from one it wrote itself out of the node's own fix.
+SOURCE = "wigle"
 UA = "pi-wigle (+https://github.com/yuiseki/pi-maplibre-native-slint-touch)"
 
 
@@ -380,12 +383,22 @@ def gps_is_live(path, now=None):
 
 
 def publish(path, lat, lon):
-    # The same five fields pi-gps writes, so pi-gps-track and everything
-    # downstream need not know which sky the answer came from. fix=1 with zero
-    # satellites is the honest description: a position, from no satellites.
+    """Write the position where pi-gps would have, and sign it.
+
+    The first five fields are pi-gps's, so pi-gps-track and everything
+    downstream need not know which sky the answer came from. fix=1 with zero
+    satellites is the honest description: a position, from no satellites.
+
+    The sixth field names the writer, and it is not decoration. pi-mesh is the
+    only process that may tell the Meshtastic node where it is, and it must
+    refuse to send back a position that came from the node itself -- otherwise
+    a measured fix becomes a hand-set one that never expires. It cannot tell
+    the difference from five numbers, so this one says. Readers that want five
+    fields are unaffected; they index the ones they know.
+    """
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
-        fh.write("%.6f %.6f %d %d %d\n" % (lat, lon, 1, 0, 0))
+        fh.write("%.6f %.6f %d %d %d %s\n" % (lat, lon, 1, 0, 0, SOURCE))
     os.replace(tmp, path)
 
 

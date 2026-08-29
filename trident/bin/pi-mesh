@@ -25,16 +25,24 @@ and while either holds it every `meshtastic ...` command fails. That is exactly
 how the standalone bridge that used to do the third job died. One owner, one
 connection, all three jobs.
 
-Sharing is off by default and is refused outright without a receiver attached,
-because the second and third jobs are opposites: with no receiver this process
-*writes* the position file from the node's own fix, and feeding that back would
-launder a measured position into a hand-set one.
+Sharing is off by default, and without a receiver it is refused for anything
+this process could have written itself: the second and third jobs are
+opposites, and feeding the node's own fix back would launder a measured
+position into a hand-set one.
+
+The exception is a position written by pi-wigle, which names itself in a sixth
+field. That one is trilaterated from visible access points -- neither a
+satellite fix nor the node talking to itself -- and indoors, where GPS reports
+fix=0 with one satellite in view, it is the only position anyone has. So a deck
+in a hotel can still tell the mesh where it is.
 
 Three rules decide when NOT to publish a position, which is the part that
 matters -- a confidently wrong position is worse than none:
 
 - **pi-gps wins.** While a USB NMEA receiver is present this publishes no
-  position of its own, so the file has exactly one writer at a time.
+  position of its own, so the file has exactly one writer at a time. That is
+  also why pi-wigle refuses to publish over a live receiver: the ranking is
+  the same everywhere, satellites first.
 - **Only LOC_INTERNAL counts** for this host. A node position can also be
   hand-set or heard over the mesh; neither is this deck's GPS.
 - **Stale is silence.** Past --max-age nothing is published, the file ages out,
@@ -179,16 +187,52 @@ def receiver_fix(path, max_age, now=None):
     return (lat, lon) if fix >= 1 else None
 
 
-def may_share(enabled, usb_gps):
+# Writers that are safe to send back to the node: their position did not come
+# from the node in the first place, so returning it launders nothing.
+SHAREABLE_SOURCES = ("wigle",)
+
+
+def fix_source(path):
+    """Who wrote the position file, from its sixth field, or None.
+
+    The five-field format cannot say, and every writer that predates this
+    leaves it out -- so None means "unknown", which is deliberately not the
+    same as "safe".
+    """
+    try:
+        with open(path) as fh:
+            parts = fh.read().split()
+    except OSError:
+        return None
+    return parts[5] if len(parts) >= 6 else None
+
+
+def may_share(enabled, usb_gps, source=None):
     """Whether this host's fix may be written into the attached node.
 
-    It may only when a real receiver is attached. Without one, the position
-    file is written by *this* process out of the node's own fix, and sending
-    that back would launder a measured position into a hand-set one -- the
-    node would then report LOC_MANUAL forever, and the freshness rule that
-    keeps a dead fix off the map would no longer apply to it.
+    A fix from a USB receiver is a measurement, and sharing it is the point.
+
+    Without a receiver the position file is normally written by *this* process
+    out of the node's own fix, and sending that back would launder a measured
+    position into a hand-set one -- the node would report LOC_MANUAL forever,
+    and the freshness rule that keeps a dead fix off the map would stop
+    applying to it.
+
+    pi-wigle is the exception, and it is why `source` exists. Its position
+    comes from trilaterating visible access points, so it is neither a
+    satellite fix nor the node talking to itself. Indoors, where GPS reports
+    fix=0 and one satellite in view, it is the only position anyone has.
+
+    An unnamed or unrecognised writer is refused. The cost of guessing wrong
+    is a dead position broadcast to the whole mesh as current, and the cost of
+    refusing is that the mesh does not learn where this deck is -- which is
+    where it already was.
     """
-    return bool(enabled and usb_gps)
+    if not enabled:
+        return False
+    if usb_gps:
+        return True
+    return source in SHAREABLE_SOURCES
 
 
 def haversine_m(a, b):
@@ -395,7 +439,8 @@ def main(argv=None):
             # inside that one connection.
             gps = find_usb_gps()
             fix = (receiver_fix(OUT_GPS, args.max_age)
-                   if may_share(args.share_position, gps) else None)
+                   if may_share(args.share_position, gps,
+                                fix_source(OUT_GPS)) else None)
             told = []
 
             def while_open(iface, fix=fix, told=told):
