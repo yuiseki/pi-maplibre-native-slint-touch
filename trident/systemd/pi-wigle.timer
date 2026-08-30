@@ -1,0 +1,22 @@
+[Unit]
+Description=Ask WiGLE where this deck is, every so often
+
+[Timer]
+# Soon after boot, because a deck that has just been carried somewhere new is
+# exactly when its idea of "here" is worst.
+OnBootSec=90s
+# Ten minutes. The cost of a run is not the interval but how many unseen BSSIDs
+# it finds: parked, everything is cached and nothing is asked; moving, it is a
+# handful per run. Ten minutes is also about how long it takes to walk far
+# enough that the answer would have changed.
+OnUnitActiveSec=10min
+# The scan takes a few seconds and every deck on the same network would
+# otherwise do it in lockstep.
+RandomizedDelaySec=60s
+# A deck that was asleep or off should not skip straight past the run that
+# would tell it where it woke up.
+Persistent=true
+Unit=pi-wigle.service
+
+[Install]
+WantedBy=timers.target

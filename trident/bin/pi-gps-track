@@ -50,7 +50,12 @@ LASTFIX = os.environ.get("PI_GPS_LASTFIX", "/dev/shm/pi-gps-lastfix")
 def parse_shm(text):
     """Parse one pi-gps line into a dict, or None if it is not one."""
     parts = (text or "").split()
-    if len(parts) != 5:
+    # At least five, not exactly five. The file grew a sixth field naming its
+    # writer, and an exact check turned that into silent staleness: pi-gps kept
+    # being written, this kept rejecting it, and pi-gps-lastfix -- the file
+    # everything downstream reads -- held a six-hour-old position while every
+    # unit involved reported success.
+    if len(parts) < 5:
         return None
     try:
         return {

@@ -1,0 +1,21 @@
+[Unit]
+Description=pi-wigle: work out where this deck is from the Wi-Fi it can see
+# Pointless without a network stack, and the scan itself needs NetworkManager.
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=yuiseki
+# 0 is a position. 1 is "no access point here is in WiGLE", which is a normal
+# answer in the countryside and must not leave a failed unit behind. 2 is a
+# missing or rejected key, which is a real fault and should show as one.
+SuccessExitStatus=0 1
+# --max 8 rather than the default 12: this runs unattended, and the daily quota
+# is shared with every other thing that asks. A parked deck costs nothing after
+# the first few runs -- the cache answers and no request is made at all.
+ExecStart=/usr/local/bin/pi-wigle --publish --max 8
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
