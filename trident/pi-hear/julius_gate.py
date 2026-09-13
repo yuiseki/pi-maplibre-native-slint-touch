@@ -65,6 +65,25 @@ def should_transcribe(has_gate, armed, heard_wake):
     return bool(heard_wake)
 
 
+def should_arm_on_gate(heard_wake, armed):
+    """Whether the gate's answer alone should arm the deck.
+
+    The wake word is settled the moment Julius says so; whisper is still 5s
+    away and is being asked a different question (what else was in the
+    sentence). Arming here is what the user sees.
+    """
+    return bool(heard_wake) and not armed
+
+
+def announce_heard(armed_by_gate):
+    """Whether emit() should publish this utterance's transcript as state.
+
+    False for the breath that armed the deck: the screen already says armed
+    and the speaker is already saying the place.
+    """
+    return not armed_by_gate
+
+
 def build_command(binary, hmm, hlist, dfa, dictionary, list_path):
     """The julius invocation, with every model named by absolute path.
 

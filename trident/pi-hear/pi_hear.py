@@ -653,13 +653,14 @@ def main():
         else:
             print(f"---- s={score:.2f} '{text}'", flush=True)
 
-    def emit(text, captured_at=None):
+    def emit(text, captured_at=None, armed_by_gate=False):
         if not text:
             return
         # Show the transcription even when it goes nowhere: on a device whose
         # screen freezes during recognition, "it heard this and did nothing" is
         # the one thing the user cannot otherwise tell from "it heard nothing".
-        publish_state("heard", text, hold=3.0, override=True)
+        if juliuslib.announce_heard(armed_by_gate):
+            publish_state("heard", text, hold=3.0, override=True)
         if args.act and not args.no_wake:
             act(text, captured_at)
         elif args.no_wake:
@@ -701,6 +702,7 @@ def main():
             if item is None:
                 break
             samples, dur, peak, captured_at = item
+            armed_by_gate = False
             # Pause the map's heavy V3D render while we run the CPU-bound ASR, so
             # the recogniser gets the full CPU and responds faster. The map
             # (maplibre-slint-gl) watches this file and skips rendering while it
@@ -738,6 +740,18 @@ def main():
                             print(f"[gate] dur={dur:.1f}s no wake word; "
                                   f"whisper skipped", file=sys.stderr, flush=True)
                         continue
+                    if juliuslib.should_arm_on_gate(heard, armed_now):
+                        # Arm on the sound rather than on the text that is
+                        # still 5s away: whisper pads every utterance to its
+                        # 30s window, so a 1.8s wake word costs 5.5s to read
+                        # back, and it was already recognised in 0.3s. The
+                        # transcription still runs -- it is what says whether
+                        # a place followed in the same breath -- but the map
+                        # dims now.
+                        armed_until[0] = time.time() + ARM_WINDOW
+                        publish_state("armed", "", hold=ARM_WINDOW, override=True)
+                        print(f"WAKE (gate; armed {ARM_WINDOW:.0f}s)", flush=True)
+                        armed_by_gate = True
                 text = engine.transcribe(samples, sr)
             finally:
                 try:
@@ -749,7 +763,7 @@ def main():
                 print(f"[flush] dur={dur:.1f}s peak={peak:.4f} "
                       f"uttq={utt_q.qsize()} -> '{text}'",
                       file=sys.stderr, flush=True)
-            emit(text, captured_at)
+            emit(text, captured_at, armed_by_gate=armed_by_gate)
 
     worker = threading.Thread(target=transcribe_worker, daemon=True)
     worker.start()

@@ -114,6 +114,44 @@ class WhoGetsTranscribed(unittest.TestCase):
         self.assertFalse(jg.needs_gate(has_gate=False, armed=False))
 
 
+class ArmingFromTheGate(unittest.TestCase):
+    """Arm on the sound, not on the transcript that follows it.
+
+    Measured on the deck, 2026-09-13: whisper takes 5.5s on a 1.8s utterance,
+    because whisper.cpp pads every input to its 30s window. The wake word was
+    already identified 5.2s earlier, by Julius, in 0.3s. Waiting for the text
+    before dimming the map spends all of that on a decision that was made.
+    """
+
+    def test_a_heard_wake_arms_a_disarmed_deck(self):
+        self.assertTrue(jg.should_arm_on_gate(heard_wake=True, armed=False))
+
+    def test_silence_does_not(self):
+        self.assertFalse(jg.should_arm_on_gate(heard_wake=False, armed=False))
+
+    def test_an_armed_deck_is_left_alone(self):
+        # Re-arming here would extend the window every time the user speaks
+        # inside it, which is not what the window is for.
+        self.assertFalse(jg.should_arm_on_gate(heard_wake=True, armed=True))
+
+
+class WhatTheScreenSaysAfterArming(unittest.TestCase):
+    """Do not take "armed" back to say "thinking" about the same breath.
+
+    emit() normally publishes the transcription so that "it heard this and
+    did nothing" is distinguishable from "it heard nothing". For the wake
+    utterance that is no longer news -- the map is already dimmed and the
+    user is mid-sentence saying the place. Overwriting it would flip the
+    screen back to Thinking while they speak.
+    """
+
+    def test_the_wake_utterance_does_not_announce_its_transcript(self):
+        self.assertFalse(jg.announce_heard(armed_by_gate=True))
+
+    def test_everything_else_still_does(self):
+        self.assertTrue(jg.announce_heard(armed_by_gate=False))
+
+
 class WhenJuliusFailsToRun(unittest.TestCase):
     """A decoder that exited without deciding has not said "no"."""
 
