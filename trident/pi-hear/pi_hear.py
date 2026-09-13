@@ -36,6 +36,7 @@ import wake as wakelib
 import engines as enginelib
 import romaji_match
 import intent as intent_mod
+import julius_gate as juliuslib
 
 
 def find_input_device(name_hint):
@@ -397,6 +398,28 @@ def build_parser():
     ap.add_argument("--mute-file", default="/tmp/pi-hear/mute",
                     help="while this file exists, drop all audio (half-duplex: "
                          "pi-say creates it during playback so we don't self-hear)")
+    # Julius wake gate. Off unless --julius-dfa is given, so an install
+    # without the grammar behaves exactly as before.
+    ap.add_argument("--julius-bin",
+                    default=os.environ.get("PI_HEAR_JULIUS_BIN",
+                                           os.path.expanduser("~/src/julius/julius/julius")),
+                    help="julius binary used to gate the whisper call")
+    ap.add_argument("--julius-hmm",
+                    default=os.environ.get("PI_HEAR_JULIUS_HMM", ""),
+                    help="acoustic model (binhmm) for the wake grammar")
+    ap.add_argument("--julius-hlist",
+                    default=os.environ.get("PI_HEAR_JULIUS_HLIST", ""),
+                    help="hmmlist matching --julius-hmm")
+    ap.add_argument("--julius-dfa",
+                    default=os.environ.get("PI_HEAR_JULIUS_DFA", ""),
+                    help="wake grammar .dfa; giving this turns the gate on. "
+                         "While disarmed, whisper runs only on utterances "
+                         "Julius heard the wake word in (36/42 vs 26/42 for "
+                         "matching whisper's text, 0 false alarms, measured "
+                         "2026-09-13 on 92 recordings from this deck)")
+    ap.add_argument("--julius-dict",
+                    default=os.environ.get("PI_HEAR_JULIUS_DICT", ""),
+                    help="wake grammar .dict matching --julius-dfa")
     ap.add_argument("--record-dir",
                     default=os.environ.get("PI_HEAR_RECORD_DIR", ""),
                     help="save every utterance here as a wav, so two "
@@ -431,6 +454,16 @@ def main():
     print(f"pi-hear: loading engine '{args.engine}' ({args.language})…",
           file=sys.stderr, flush=True)
     engine = enginelib.build_engine(args)
+
+    # The wake gate, when a grammar was given. Constructed here so a missing
+    # binary or grammar stops the deck at startup rather than turning every
+    # utterance into a silent no-wake.
+    wake_gate = None
+    if args.julius_dfa:
+        wake_gate = juliuslib.JuliusGate(
+            binary=args.julius_bin, hmm=args.julius_hmm,
+            hlist=args.julius_hlist, dfa=args.julius_dfa,
+            dictionary=args.julius_dict)
 
     sr = args.samplerate
     block_dur = args.blocksize / sr
@@ -685,6 +718,26 @@ def main():
             if args.record_dir:
                 _keep_utterance(args.record_dir, samples, sr)
             try:
+                # Gate: while disarmed, spend the whisper call only on
+                # utterances Julius heard the wake word in. Armed utterances
+                # are the command itself and go straight through -- the
+                # command is not in the grammar.
+                armed_now = within_arm_window(captured_at, armed_until[0])
+                if juliuslib.needs_gate(wake_gate is not None, armed_now):
+                    try:
+                        heard = wake_gate.hears_wake(samples, sr)
+                    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                        # Say so and transcribe anyway. A gate that cannot
+                        # answer must not be the reason the deck stops
+                        # listening; degrade to whisper-on-everything.
+                        print(f"pi-hear: wake gate failed ({exc}); "
+                              f"falling back to whisper", file=sys.stderr, flush=True)
+                        heard = True
+                    if not juliuslib.should_transcribe(True, armed_now, heard):
+                        if args.debug:
+                            print(f"[gate] dur={dur:.1f}s no wake word; "
+                                  f"whisper skipped", file=sys.stderr, flush=True)
+                        continue
                 text = engine.transcribe(samples, sr)
             finally:
                 try:
